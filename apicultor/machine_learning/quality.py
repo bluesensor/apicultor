@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 def energy(mag): return np.sum((10 ** (mag / 20)) ** 2)
 
 
-def rel(at): return at * 10  # calculate release time
+def dec(at,scalar): return at * (500*scalar/100)  # calculate decay time based on a maximum scalar
+
+def rel(at,scalar): return at * (1000*scalar/100)  # calculate release time based on a maximum scalar
 
 
 # convert attack and release time to coefficients
@@ -790,9 +792,4 @@ def main():
                 #del without_rumble
 
     except Exception as e:
-        logger.exception(e)
-        exit(1)
-
-
-if __name__ == '__main__':
-    main()
+        logg
