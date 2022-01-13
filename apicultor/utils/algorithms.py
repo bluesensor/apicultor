@@ -136,7 +136,8 @@ def intensity(complexity,kurtosis,dissonance):
     return ['relaxed','moderate','aggresive'][intensity]
 
 def roll_off(spectrum,fs):
-    e_m = energy(spectrum)
+    #energy in potential terms
+    e_m = np.inner(spectrum,spectrum) 
     cutoff = .85 * e_m
     cume = 0
     rolloff = 0
@@ -146,7 +147,6 @@ def roll_off(spectrum,fs):
             rolloff=i
     rolloff *= (fs/2) / (spectrum.size-1)
     return rolloff
-
 
 def audio_fingerprint(peaks):
     encoded_peaks = hash(peaks[:4])
@@ -709,21 +709,32 @@ class MIR:
         else:
             self.attack_time = at
 
-    def IIR(self, array, cutoffHz, type):
+    def IIR(self, array, cutoffHz, type,octave_rolloff=6):
         """Apply an Infinite Impulse Response filter to the input signal                                                                        
-        -param: cutoffHz: cutoff frequency in Hz                        
-        -type: the type of filter to use [highpass, bandpass]"""                                        
+        :param: array: input array
+        :param: cutoffHz: cutoff frequency in Hz                        
+        :param: type: the type of filter to use [highpass, bandpass]        
+        :param: octave_rolloff: rolloff in decibels to compute filter order 
+        """                                        
         if type == 'bandpass':                                          
             nyquist_low = self.nyquist(cutoffHz[0]) 
             nyquist_hi = self.nyquist(cutoffHz[1])                
             Wn = [nyquist_low, nyquist_hi] 
         else:                
-            Wn = self.nyquist(cutoffHz)            
-        if not type=='lowpass':              
-            b,a = iirfilter(1, Wn, btype = type, ftype = 'butter')  
-        else: 
-            b,a = iirfilter(1, Wn, btype = type)       
-        output = lfilter(b,a,array) #use a time-freq compromised filter
+            Wn = self.nyquist(cutoffHz)    
+        order = int(octave_rolloff/6)            
+        if order >= 4:
+            if not type=='lowpass':
+                sos = iirfilter(order, Wn, btype = type, ftype = 'butter',output='sos')
+            else:
+                sos = iirfilter(order, Wn, btype = type,output='sos')
+            output = sosfilt(sos,array) #use a time-freq compromised filter   
+        else:
+            if not type=='lowpass':
+                b,a = iirfilter(order, Wn, btype = type, ftype = 'butter')
+            else:
+                b,a = iirfilter(order, Wn, btype = type)
+            output = lfilter(b,a,array) #use a time-freq compromised filter
         return output 
 
     def pitch_salience_function(self,thres=1):
@@ -1784,7 +1795,7 @@ def music_structure_analysis(signal,separator,fun='median'):
     for magnitude in song.audio_signal_spectrum:
         song.magnitude_spectrum = magnitude
         song.spectral_peaks()
-        pcps.append(hpcp(song,28))
+        pcps.append(hpcp(song,28)) #> 400
     pcps = np.array(pcps)
     ticks = np.array(ticks)    
 
