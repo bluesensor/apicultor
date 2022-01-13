@@ -15,7 +15,7 @@ supercollider = Extension('apicultor.supercollider',
 
 setup(name='apicultor-dev',
       version='2.0.1',
-      url='https://www.github.com/sonidosmutantes/apicultor',
+      url='https://www.github.com/MarsCrop/apicultor',
       description='BigData system of sound effects, remixes and sound collections',
       long_description=long_description,
       long_description_content_type='text/markdown',
