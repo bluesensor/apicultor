@@ -201,7 +201,7 @@ def find_saturation(song):
         past_mask = current_mask
     if prev_start and len(dflanks) > 9:
         start = prev_start
-        end = float(idx * song.H + dflanks[0] / 48000)
+        end = float(idx * song.H + dflanks[0] / song.fs)
         duration = end -start
         if duration > min_dur:
             starts.append(start)
@@ -209,13 +209,13 @@ def find_saturation(song):
         prev_start = 0
         dflanks.remove(dflanks[0])
     if len(uflanks) != len(dflanks) and len(uflanks) > 0:
-        prev_start = idx * song.H + uflanks[-1] / 48000
+        prev_start = idx * song.H + uflanks[-1] / song.fs
         uflanks.pop(-1) 
     if len(uflanks) != len(dflanks) and idx == 0:
         dflanks.pop(-1)
     for i in range(len(uflanks)):
-        start = float(idx * song.H + uflanks[0] / 48000) 
-        end = float(idx * song.H + dflanks[0] / 48000) 
+        start = float(idx * song.H + uflanks[0] / song.fs) 
+        end = float(idx * song.H + dflanks[0] / song.fs) 
         duration = end -start
         if duration >= min_dur:
             starts.append(start)
@@ -341,7 +341,7 @@ def NSGConstantQ(signal):
         cqtbw[j] = Q * _baseFreqs[j] + _gamma;
     _binsNum = _baseFreqs.size  
     _baseFreqs = np.append(_baseFreqs,0)     
-    _baseFreqs = np.append(_baseFreqs,22050) 
+    _baseFreqs = np.append(_baseFreqs,int(signal.fs/2)) 
 
     for j in reversed(range(_binsNum)):                                                 
          _baseFreqs = np.append(_baseFreqs,signal.fs -_baseFreqs[j])
@@ -1086,7 +1086,7 @@ class MIR:
         """Computes tempo of a signal in Beats Per Minute with its tempo onsets""" 
         self.onsets_strength()                                                             
         n = len(self.envelope) 
-        win_length = np.asscalar(np.array([int(np.floor(8*48000/self.H))]))
+        win_length = np.asscalar(np.array([int(np.floor(8*self.fs/self.H))]))
         ac_window = hann(win_length) 
         self.envelope = np.pad(self.envelope, int(win_length // 2),mode='linear_ramp', end_values=[0, 0])
         frames = 1 + int((len(self.envelope) - win_length) / 1) 
@@ -1228,7 +1228,7 @@ class MIR:
     def trackPitchContour(self,_nonSalientPeaksBins,peak_thres=0):
         max_i = 0
         max_j = 0
-        _timeContinuityInFrames = (100 / 1000.0) * 44100 / self.H
+        _timeContinuityInFrames = (100 / 1000.0) * self.fs / self.H
         maxSalience = 0
         bins = []
         saliences = []
