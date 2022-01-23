@@ -508,7 +508,15 @@ def constantQ_transform(audio):
         pin += 1024
     return output
 
-def noise_gate(audio,fs=44100,thresh_db=-32,reduction_db=-20,freq_cut=0,ca=.0001,cdec=.001, hold_time=0):
+def at_start(attacking_samples, decaying_samples,on_count, start_decay):
+    total = attacking_samples + decaying_samples
+    if on_count - start_decay < total:
+        at_start = on_count - (attacking_samples*(on_count-start_decay)) / total
+    else:
+        at_start = on_count - attacking_samples
+    return at_start
+
+def noise_gate(audio,fs=44100,thresh_db=-32,reduction_db=-20,freq_cut=0,ca=.001,cdec=.01, hold_time=0):
     """
     RMS noise as least autocorrelated (stationary) samples (other peaks and heart beatings) 
     of its signal envelope (spsynth rather than anisotropic diffusion)
@@ -522,58 +530,147 @@ def noise_gate(audio,fs=44100,thresh_db=-32,reduction_db=-20,freq_cut=0,ca=.0001
         elif mask[i] === max(mask):
                 alpha[i] (or beta[i]) = min(alpha)
         elif min(mask) > mask[i] > max(mask):
-                alpha[i] (or beta) = max(alpha) *(( max(mask) - mask[i] )/( max(mask) - min(mask) ) + min(alpha) *( ( mask[i] - min(mask) )/( max(mask)- min(mask) ))
+                alpha[i] (or beta) = max(alpha) *(( max(mask) - mask[i] )/( max(mask) - min(mask) ) + min(alpha) *( ( mask[i] - min(mas
+k) )/( max(mask)- min(mask) ))
     """
     pend = len(audio)-(int(fs/10)+1102)
     song = sonify(audio, fs)
     pin = 0
     output = np.zeros(len(audio))
-    amp = audio.max()
-    reduction = 10**(reduction_db*.1) #dBmV to amplitude    
+    amp = audio.max()   
     holda = ca
     half_fs = fs/2
+    state = 'gate_off'
+    attacking_samples = fs * ca + .5
+    decaying_samples = fs * cdec + .5
+    decay_start = decaying_samples
+    lin_thresh = db2lin(thresh_db)
+    lin_reduction = db2lin(reduction_db) 
+    decay_end = 0   
+    #to coefficient
+    decay_factor = np.exp(reduction_db/decaying_samples)
+    #to coefficient
+    attack_factor = np.exp(-reduction_db/attacking_samples)
+    gate_val = lin_thresh
+    lookahead = ca
+    delay_size = np.max([1,round(fs*lookahead)])
+    stop_count = 0
+    decay_end = 0
+    current = 0
+    ptr = 2048
+    gate = []
+    output = np.zeros(len(audio))
+    attack_start = at_start(attacking_samples, decaying_samples, 0, decay_start)      
     if freq_cut == 0:
-        freq_cut = 2049
+        freq_cut = 3
         ngate = 2048
     else:
-        freq_cut = int(freq_cut*2048/half_fs)
+        freq_cut = int(freq_cut*2/half_fs)
         ngate = freq_cut
     while pin < pend:
         selection = pin+2048
-        song.frame = audio[pin:selection]
+        song.frame = audio[selection:selection+2048]
+        togo = audio.size - selection
+        #print('Togo', togo, 'Selection', selection, 'Pin', pin)
+        togo = min([togo,selection])
         song.window()
-        song.M = 2048
-        song.H = 2048
         song.Spectrum()
-        log_spectrum = 10*np.log10(song.magnitude_spectrum*song.H**2)
-        song.Envelope()
-        song.AttackTime()
-        dec_coef = to_coef(cdec, fs)
-        at_coef = to_coef(ca, fs)
-        gs = np.zeros(song.magnitude_spectrum.size)
-        #hold time: time at which the attack should happen as open
-        holda = holda + song.attack_time 
-        if np.any(log_spectrum < thresh_db):
-            gc = gate_constraint_satis(
-                    song.magnitude_spectrum[:freq_cut], [log_spectrum, thresh_db], reduction)        
+        now = selection
+        dbs = 20*np.log10(song.magnitude_spectrum*song.H**2)
+        #print('dbs',dbs)
+        spectrum_db = db2lin(dbs)
+        if np.any(spectrum_db >= lin_thresh):
+            path_time = np.where(spectrum_db >= lin_thresh)[0][0]
+            now += path_time
+            print('Current state', state, 'and estimated future', selection+path_time)
         else:
-            np.add.at(output, range(pin, selection), song.frame)
+            path_time = 0
+            #print('Current now', now, 'and estimated future', selection+path_time)    
+        #RMS in dB
+        log_spectrum = np.sqrt(np.mean(song.frame**2))
+        #print('Log spectrum', log_spectrum,'Threshold',lin_thresh)
+        #dec_coef = to_coef(cdec, fs)
+        #at_coef = to_coef(ca, fs) 
+        #now = pin + selection + togo - togo 
+        #now = selection
+        #print('State',state,'Gate gain', gate_val,'Now',selection/44100, 'Stop count',stop_count/44100, 'Decay end', decay_end/44100, 'Decay start', decay_start/44100, 'Attack start', attack_start/44100)   
+        if log_spectrum >= lin_thresh:
+            print('Estimated now at',state,':',path_time)           
+        if state == 'must_hold':
+            if log_spectrum > lin_thresh:
+                decay_end = now + delay_size 
+            elif now >= stop_count: #gate is closed
+                state = 'must_close'
+                stop_count = now + decaying_samples      
+                decay_start = now
+            #break
+        #falls looking for a next time    
+        elif state == 'must_close':
+            gate_val *= decay_factor
+            if log_spectrum >= lin_thresh:
+                decay_start = now + delay_size
+                attack_start = now + delay_size
+                attack_start = at_start(attacking_samples, decaying_samples, attack_start, decay_start)        
+                state = 'must_keep_close'
+                #print('Changing state to keep close')
+            elif now == stop_count: #gate closes  
+                state = 'gate_off'
+                gate_val = lin_reduction
+            #break
+        #falls until new open    
+        elif state == 'must_keep_close':
+                gate_val *= decay_factor
+                if log_spectrum >= lin_thresh:
+                    decay_end = now + delay_size
+                if now >= attack_start:
+                    state = 'must_open'
+                elif now >= stop_count:
+                    state = 'must_off_until'
+                    gate_val = lin_reduction
+                #break    
+        elif state == 'gate_off':
+            if log_spectrum >= lin_thresh:
+                decay_end = now + delay_size
+                attack_start = now + delay_size
+                attack_start = at_start(attacking_samples, decaying_samples, attack_start, decay_start)                        
+            if now >= attack_start:
+                state = 'must_open'
+            else:
+                state = 'must_off_until'
+            #break
+
+        elif state == 'must_off_until':
+            if log_spectrum >= lin_thresh:
+                decay_end = now + delay_size   
+            if now >= attack_start:
+                state = 'must_open'
+            #break
+        elif state == 'must_open':
+            gate_val *= attack_factor
+            if log_spectrum >= lin_thresh:
+                decay_end = now + delay_size
+                #print('Hold updating while open')
+            if now >= attack_start:
+                #print('Feasible', db2lin(spectrum_db))
+                gate_val = 1
+                state = 'must_hold'
+            #break
+        current += 2
+        ptr += togo
+        if log_spectrum >= lin_thresh:
+            pin += path_time
+        else:    
             pin = pin + song.H
-            continue
-        for i, x in enumerate(gc):
-            if holda > hold_time and gc[i - 1] <= gs[i - 1]:
-                if x > gc[i - 1]:
-                    gs[i] = at_coef * gs[i - 1] + (1 - at_coef) * x
-            if holda <= hold_time:
-                gs[i] = gs[i-1]
-            if gc[i] > gs[i - 1]:
-                gs[i] = dec_coef * gs[i - 1] + (1 - dec_coef) * x  
-        song.frame[:freq_cut] *= gs[:ngate]        
-        np.add.at(output, range(pin, selection), song.frame)
-        pin = pin + song.H
         #gate acts in time domain of the signal
-        hold_time += selection/fs
+        #print('Gate value', gate_val, 'state', state)
+        #print('Attack factor',attack_factor)
+        #print('Decay factor',decay_factor)
+        gate.append(gate_val)
+        #print('Audio', audio[selection:selection+2048])
+        np.add.at(output, range(selection,selection+2048), audio[selection:selection+2048]*gate_val)
+        #print('Output',output)
     return np.float32(output)
+
 
 def hiss_removal(audio):
     """
