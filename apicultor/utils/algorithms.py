@@ -723,12 +723,12 @@ class MIR:
         else:                
             Wn = self.nyquist(cutoffHz)    
         order = int(octave_rolloff/6)            
-        if order >= 4:
+        if order > 1:
             if not type=='lowpass':
-                sos = iirfilter(order, Wn, btype = type, ftype = 'butter',output='sos')
+                iirsos = iirfilter(order, Wn, btype = type, ftype = 'butter', output='sos', analog=False)
             else:
-                sos = iirfilter(order, Wn, btype = type,output='sos')
-            output = sosfilt(sos,array) #use a time-freq compromised filter   
+                iirsos = iirfilter(order, Wn, btype = type, ftype = 'butter',output='sos', analog=False)
+            output = sosfiltfilt(iirsos,array) #use a time-freq compromised filter              
         else:
             if not type=='lowpass':
                 b,a = iirfilter(order, Wn, btype = type, ftype = 'butter')
