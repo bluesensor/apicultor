@@ -1,5 +1,5 @@
 import numpy as np
-
+from ..gradients.subproblem import *
 
 def BTC(y, yhat):
     """
@@ -12,6 +12,11 @@ def BTC(y, yhat):
     hat_btcs = []
     istarget_prev = 1e-4
     istarget_dep = 1e-4
+    if y[0].size > 1:
+        y = sigmoid(y)
+        yhat = sigmoid(yhat)
+        y = np.argmax(np.array(y),axis=1)
+        yhat = np.argmax(np.array(yhat),axis=1)       	
     for i in np.unique(y):
         for j in range(len(y)):
             if y[j] == i:
@@ -41,6 +46,11 @@ def BEC(y, yhat, keep_index=None, return_array=None):
     istarget_prev = 1e-4
     istarget_con = 1e-4
     hat_cons = []
+    if y[0].size > 1:
+        y = sigmoid(y)
+        yhat = sigmoid(yhat)
+        y = np.argmax(np.array(y),axis=1)
+        yhat = np.argmax(np.array(yhat),axis=1)   
     for i in np.unique(y):
         if keep_index == None:
             iscon = []
