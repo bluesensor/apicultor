@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 def energy(mag): return np.sum((10 ** (mag / 20)) ** 2)
 
-
 def dec(at,scalar): return at * (500*scalar/100)  # calculate decay time based on a maximum scalar
 
 def rel(at,scalar): return at * (1000*scalar/100)  # calculate release time based on a maximum scalar
@@ -328,7 +327,7 @@ def click_find(song, frame, silenceThreshold, powerEstimationThreshold, detectio
     try:
         lpc, _ = song.LPC(parallel)
     except Exception as e:
-        print('Error computing at', parallel, ':', e)
+        #print('Error computing at', parallel, ':', e)
         return
 
     lpc /= np.max(lpc)
@@ -359,7 +358,7 @@ def click_find(song, frame, silenceThreshold, powerEstimationThreshold, detectio
             cutOff = (song.fs/2) * start / song.N
             frame = song.IIR(frame, cutOff, 'low')
             y_starts.append(start)
-
+        #print('Signal has detections')
         # for end in ends:
         #     y.append(end + idx_)
         if filter_signal is True:
@@ -367,6 +366,7 @@ def click_find(song, frame, silenceThreshold, powerEstimationThreshold, detectio
         else:
             return y_starts
     else:
+        #print('Signal does not have detections')
         if filter_signal is True:
             return frame
         else:
@@ -377,7 +377,7 @@ def click_find(song, frame, silenceThreshold, powerEstimationThreshold, detectio
 # low pass filtering
 
 
-def find_clicks(song, filter_signal, parallel):
+def find_clicks(song, filter_signal, parallel=True):
     idx_ = 0
     threshold = 10
     powerEstimationThreshold = 10
@@ -388,7 +388,7 @@ def find_clicks(song, filter_signal, parallel):
     end_proc = int(song.M / 2 + song.H / 2)
 
     #y = []
-    clickless = np.zeros(song.signal.size)
+    clickless = np.zeros(song.x.size)
     from pathos.pools import ProcessPool as Pool
     pthread = Pool(nodes=2)
     frames = (frame for frame in song.FrameGenerator())
@@ -492,6 +492,38 @@ def HarmonicBpm():
                 bestHarmonicBpms[bestHarmonicBpms.size()-1] = bestBpm
         prevBestBpm = bestBpm
     return bestHarmonicBpms
+
+def expand(song,threshold,dB,normalize=True):
+    """
+    This method filters a signal by expanding the
+    robust peaks (peaks above a given threshold).
+    If normalize is False, it will return the given
+    signal with raised peaks
+    """
+    output = np.zeros(song.x.size)
+    start = 0
+    end = 2048
+    for frame in song.FrameGenerator():
+       #compute rms of a signal
+       rms = np.sqrt(np.mean(frame**2))
+       #raise peaks to the given intensity
+       if rms > threshold:
+           try:
+               output[start:end] += 10**(dB*.05)
+           except Exception as e:
+               continue
+       else:
+           try:
+               output[start:end] += frame
+           except Exception as e:
+               continue
+       start += 1024
+       end += 1024    
+    #preserve peaks
+    if normalize == True:
+        output /= output.max() 
+    return np.array(output)
+
 
 
 def constantQ_transform(audio):
@@ -671,7 +703,6 @@ k) )/( max(mask)- min(mask) ))
         #print('Output',output)
     return np.float32(output)
 
-
 def hiss_removal(audio):
     """
     RMS noise as least autocorrelated (stationary) samples (other peaks and heart beatings) 
@@ -716,7 +747,7 @@ def hiss_removal(audio):
         power_spectral_density = np.abs(ft) ** 2
         song.Envelope()
         song.AttackTime()
-        rel_time = rel(song.attack_time)
+        rel_time = rel(song.attack_time,1)
         rel_coef = to_coef(rel_time, 44100)
         at_coef = to_coef(song.attack_time, 44100)
         ca = ca + song.attack_time
@@ -727,6 +758,8 @@ def hiss_removal(audio):
             if np.any(power_spectral_density < noise_floor):
                 gc = dyn_constraint_satis(
                     ft, [power_spectral_density, noise_floor], 0.12589254117941673)
+                #gc = dyn_constraint_satis(
+                #    ft, [power_spectral_density, noise_floor], 0.)
                 if ca > hold_time:
                     gc = np.complex64([at_coef * gc[i - 1] + (1 - at_coef)
                                       * x if x > gc[i - 1] else x for i, x in enumerate(gc)])
@@ -857,7 +890,7 @@ def main():
                 print(("Rewriting without aliasing in %s" % f))
                 song = sonify(neural, 48000)
                 # anti-aliasing filtering: erase frequencies higher than the sample rate being used
-                audio = song.IIR(song.signal, 20000, 'lowpass')
+                audio = song.IIR(song.x, 20000, 'lowpass')
                 print(("Rewriting without DC in %s" % f))
                 # remove direct current on audio signal
                 audio = song.IIR(audio, 40, 'highpass')
@@ -868,15 +901,15 @@ def main():
                 normalized_riaa = normalize(audio)
                 del audio
                 print(("Rewriting with Hum removal applied in %s" % f))
-                song.signal = np.float32(normalized_riaa)
+                song.x = np.float32(normalized_riaa)
                 # remove undesired 50 hz hum
                 without_hum = song.BandReject(
                     np.float32(normalized_riaa), 50, 16)
                 del normalized_riaa
                 print(("Rewriting with subsonic rumble removal applied in %s" % f))
-                song.signal = without_hum
+                song.x = without_hum
                 # remove subsonic rumble
-                without_rumble = song.IIR(song.signal, 20, 'highpass')
+                without_rumble = song.IIR(song.x, 20, 'highpass')
                 del without_hum
                 # calculate silence if present in audio signal
                 db_mag = 20 * np.log10(abs(without_rumble))
@@ -889,4 +922,9 @@ def main():
                 #del without_rumble
 
     except Exception as e:
-        logg
+        logger.exception(e)
+        exit(1)
+
+
+if __name__ == '__main__':
+    main()
