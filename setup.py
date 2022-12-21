@@ -15,7 +15,7 @@ supercollider = Extension('apicultor.supercollider',
 
 setup(name='apicultor',
       version='2.0.1',
-      url='https://www.github.com/MarsCrop/apicultor',
+      url='https://www.github.com/sonidosmutantes/apicultor',
       description='BigData system of sound effects, remixes and sound collections',
       long_description=long_description,
       long_description_content_type='text/markdown',
@@ -43,5 +43,5 @@ setup(name='apicultor',
         'audio2ogg = apicultor.helper.convert_to_ogg:main',
         'smcomposition = apicultor.state_machine.SMComposition:main'
     ]},
-    install_requires=['numpy', 'numba', 'smst', 'wget', 'colorama', 'transitions','pysoundfile', 'librosa', 'scipy', 'matplotlib', 'scikit-learn', 'bs4', 'pandas']
+    install_requires=['numpy', 'pathos', 'numba', 'smst', 'wget', 'colorama', 'transitions','pysoundfile', 'librosa', 'scipy', 'matplotlib', 'scikit-learn', 'bs4', 'pandas']
      )
