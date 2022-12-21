@@ -1,9 +1,10 @@
 import numpy as np
 from sklearn.metrics import accuracy_score
 from .visuals import plot_regression
-from random import sample
+from random import sample, randint
 import logging
 import warnings
+from sklearn.metrics import mean_squared_error, accuracy_score
 
 warnings.simplefilter("ignore", ResourceWarning)
 warnings.simplefilter("ignore", RuntimeWarning)
@@ -29,7 +30,7 @@ def acc_score(targs, classes):
 # productive
 
 
-def explain(model, x, ys, limit, idxs, logical=None, plot=None, fig=None, thresh=None):
+def explain(model, x, ys, limit, Idxs, logical=None, plot=None, fig=None, thresh=None):
     """
     Since the number of relevant features in a dataset must be less than the number of  targets,
     this method follows given criteria to split the dataset into subsets to predict accuracy 
@@ -40,7 +41,7 @@ def explain(model, x, ys, limit, idxs, logical=None, plot=None, fig=None, thresh
     :param ys (type(ys) == np.darray): related targets
     :param limit (type(limit) == list): if a list of strings is given only 'mean', 'var' or 'std' are supported,
         it also supports other types. This argument sets the intersection value (eg.: [x[:,0] > 900, x[:,4] > 70])
-    :param idxs (type(intersects) == list): indexes of important features to perturb
+    :param Idxs (type(intersects) == list): indexes of important features to perturb
     :param logical (type(logical) == bool or type(logical) == list): bool or a list of bools (must be of the size of limits).
         If True is passed, observability is based on positive limit. If False is passed, observability is based on not
         positive limit. If None is passed, the current limit is not observable and therefore it is contrasted against the 
@@ -58,12 +59,25 @@ def explain(model, x, ys, limit, idxs, logical=None, plot=None, fig=None, thresh
     truek = model.kernel1
     model.kernel1 = 'rbf'
     noisy_x = x.copy()
+    idxs = []
     for yi in range(len(limit)):
-        targets = model.predictions(noisy_x, ys)
+        if Idxs[yi] == None:
+            idxs.append(randint(0,x.shape[1]))
+        else:
+            idxs.append(Idxs[yi])
+    for yi in range(len(limit)):
+        if ys[0].size > 1:
+            targets = model.w[0] * noisy_x * model.bias
+        else:
+            targets = model.predictions(noisy_x, ys)
         noisy_x[:, idxs[yi]] = np.array(
             sample(list(noisy_x[:, idxs[yi]]), noisy_x[:, idxs[yi]].size))
         if limit[yi] == 'mean':
             intersection = noisy_x[:, idxs[yi]].mean()
+            #intersection = noisy_x[:,idxs[yi]].mean()*thresh
+        if limit[yi] == 'median':
+            rob_noise = np.median(noisy_x[:, idxs[yi]]) * noisy_x[:, idxs[yi]]         	
+            intersection = np.mean(rob_noise)
             #intersection = noisy_x[:,idxs[yi]].mean()*thresh
         elif limit[yi] == 'var':
             intersection = np.var(noisy_x[:, idxs[yi]])
@@ -78,10 +92,18 @@ def explain(model, x, ys, limit, idxs, logical=None, plot=None, fig=None, thresh
                 if len(logical) != len(limit):
                     raise ValueError('Missing logic')
                 if logical[yi] != True:
-                    pos_explanation_scores.append(acc_score(ys[np.where(np.logical_not(
-                        noisy_x[:, idxs[yi]] > intersection))], targets[np.where(np.logical_not(noisy_x[:, idxs[yi]] > intersection))]))
-                    neg_explanation_scores.append(acc_score(ys[np.where(np.logical_not(
-                        noisy_x[:, idxs[yi]] < intersection))], targets[np.where(np.logical_not(noisy_x[:, idxs[yi]] < intersection))]))
+                    if not ys[0].size > 1:
+                        pos_explanation_scores.append(acc_score(ys[np.where(np.logical_not(
+                            noisy_x[:, idxs[yi]] > intersection))], targets[np.where(np.logical_not(noisy_x[:, idxs[yi]] > intersection))]))
+                        neg_explanation_scores.append(acc_score(ys[np.where(np.logical_not(
+                            noisy_x[:, idxs[yi]] < intersection))], targets[np.where(np.logical_not(noisy_x[:, idxs[yi]] < intersection))]))
+                    else:
+                        pos_mse = mean_squared_error(ys[np.where(np.logical_not(
+                            noisy_x[:, idxs[yi]] > intersection))], targets[np.where(np.logical_not(noisy_x[:, idxs[yi]] > intersection))])
+                        neg_mse = mean_squared_error(ys[np.where(np.logical_not(
+                            noisy_x[:, idxs[yi]] < intersection))], targets[np.where(np.logical_not(noisy_x[:, idxs[yi]] < intersection))])
+                        pos_explanation_scores.append(pos_mse)
+                        neg_explanation_scores.append(neg_mse)
                     # data drift
                     noisy_x = noisy_x[np.where(np.logical_not(
                         noisy_x[:, idxs[yi]] > intersection))]
@@ -89,20 +111,37 @@ def explain(model, x, ys, limit, idxs, logical=None, plot=None, fig=None, thresh
                     ys = ys[np.where(np.logical_not(
                         noisy_x[:, idxs[yi]] > intersection))]
                 else:
+                    print('WHERE', np.where(noisy_x[:, idxs[yi]] > intersection))
+                    if not ys[0].size > 1:
+                        pos_explanation_scores.append(acc_score(ys[np.where(
+                            noisy_x[:, idxs[yi]] > intersection)[0]], targets[np.where(noisy_x[:, idxs[yi]] > intersection)[0]]))
+                        neg_explanation_scores.append(acc_score(ys[np.where(
+                            noisy_x[:, idxs[yi]] < intersection)[0]], targets[np.where(noisy_x[:, idxs[yi]] < intersection)[0]]))
+                    else:
+                        pos_mse = mean_squared_error(ys[np.where(
+                            noisy_x[:, idxs[yi]] > intersection)[0]], targets[np.where(noisy_x[:, idxs[yi]] > intersection)[0]])
+                        neg_mse = mean_squared_error(ys[np.where(
+                            noisy_x[:, idxs[yi]] < intersection)[0]], targets[np.where(noisy_x[:, idxs[yi]] < intersection)[0]])
+                        pos_explanation_scores.append(pos_mse)
+                        neg_explanation_scores.append(neg_mse) 
+                    # data drift
+                    noisy_x = noisy_x[np.where(
+                        noisy_x[:, idxs[yi]] > intersection)[0]]
+                    # concept drift
+                    ys = ys[np.where(noisy_x[:, idxs[yi]] > intersection)[0]]
+            else:
+                if not ys[0].size > 1:
                     pos_explanation_scores.append(acc_score(ys[np.where(
                         noisy_x[:, idxs[yi]] > intersection)], targets[np.where(noisy_x[:, idxs[yi]] > intersection)]))
                     neg_explanation_scores.append(acc_score(ys[np.where(
                         noisy_x[:, idxs[yi]] < intersection)], targets[np.where(noisy_x[:, idxs[yi]] < intersection)]))
-                    # data drift
-                    noisy_x = noisy_x[np.where(
-                        noisy_x[:, idxs[yi]] > intersection)]
-                    # concept drift
-                    ys = ys[np.where(noisy_x[:, idxs[yi]] > intersection)]
-            else:
-                pos_explanation_scores.append(acc_score(ys[np.where(
-                    noisy_x[:, idxs[yi]] > intersection)], targets[np.where(noisy_x[:, idxs[yi]] > intersection)]))
-                neg_explanation_scores.append(acc_score(ys[np.where(
-                    noisy_x[:, idxs[yi]] < intersection)], targets[np.where(noisy_x[:, idxs[yi]] < intersection)]))
+                else:
+                    pos_mse = mean_squared_error(ys[np.where(
+                        noisy_x[:, idxs[yi]] > intersection)], targets[np.where(noisy_x[:, idxs[yi]] > intersection)])
+                    neg_mse = mean_squared_error(ys[np.where(
+                        noisy_x[:, idxs[yi]] < intersection)], targets[np.where(noisy_x[:, idxs[yi]] < intersection)])
+                    pos_explanation_scores.append(pos_mse)
+                    neg_explanation_scores.append(neg_mse) 
                 # data drift
                 noisy_x = noisy_x[np.where(
                     noisy_x[:, idxs[yi]] > intersection)]
@@ -120,7 +159,7 @@ def explain(model, x, ys, limit, idxs, logical=None, plot=None, fig=None, thresh
             except Exception as e:
                 plt = None
         except Exception as e:
-            print('Bad explanation parameters given')
+            print('Explanation Error:', logger.exception(e), 'with sum', np.sum(ys[np.where(np.logical_not(noisy_x[:, idxs[yi]] > intersection))] - targets[np.where(np.logical_not(noisy_x[:, idxs[yi]] > intersection))]))
     model.kernel1 = truek
     # add code for effect size or feature transformation
     # given expected criteria, return accuracies per instance
