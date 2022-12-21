@@ -16,7 +16,8 @@ import cmath
 #from apicultor.machine_learning.quality import *
 import warnings
 import logging
-import signal
+from time import sleep
+#import signal
 
 #TODO: *Remove wows, clippings, pops
 
@@ -32,11 +33,25 @@ logger = logging.getLogger(__name__)
 #presion_diferencial = max(presion_latidos) / presion_latidos (la presión se relaja según el esfuerzo máximo)
 #aumentar la presión incrementa el BPM, pero el BPM no es causa del incremento de presión
 
+just_system = np.array(list(reversed(np.sort(np.resize(np.array([1200,1151.23,1137,1088.27,1049.36,1035,1017.5,996.09,968.83,933.13,884.6,852.59,813.69,764.92,
+    				701.96,648.68,582.51,551.32,498.04,454.21,435.08,386.31,347.41,336.13,320.14,315.64,301.85,289.21, 
+    				274.58,266.87,247.74,231.17,203.91,182.4,165,150.64,119.44,111.73,97.36,84.47,70.67,62.96,53.27,
+    				38.91,27.26,13.79,0]),96)))))
+
+hz2note = lambda hz: 440 * 2*(-58/12) * (2*(1/12))**hz 
+note2hz = lambda note: 440 * 2*((note-58)/12)
+
 p = lambda r, n: (r * np.sqrt(n-2)) / np.sqrt(1-(r**2))
 
+#Hz can be converted to cents by using log2
 hz2cent = lambda hz: np.floor(120 * np.log2(hz) + -693.2631656229591)
 
+#Cents can be converted to hz by using f0, (septima semicomma in cents) / octave in cents
 cent2hz = lambda cent, f0: f0 * pow(pow(2, 10 / 1200.0), cent)
+
+abshz = lambda position, ref_pitch, ref_position: (ref_pitch * np.sqrt(2,12)) ** (position - ref_position)
+
+hz2temperedHz = lambda pitch, ref_pitch: (ref_pitch * 2) * (np.round(12*np.log2(pitch/ref_pitch))/12)
 
 #TODO: Sintesis de transientes: DCT->FFT->IFFT-IDCT
 
@@ -105,6 +120,34 @@ def central_moments(self):
     central_moments[4] = m4*pow(r,4)
     return central_moments
 
+def tristimulus(frequencies, magnitudes):
+    #this method returns tristimulus values from
+    #frequencies and magnitudes
+    tristimulus = np.zeros(3)
+    frequencies = sorted(frequencies)
+    sigma = 0
+    for i in range(len(magnitudes)):
+        sigma += magnitudes[i]
+    if sigma == 0:
+            tristimulus[0] = 0
+            tristimulus[1] = 0
+            tristimulus[2] = 0
+            return
+    tristimulus[0] = magnitudes[0] / sigma    
+    if len(frequencies) < 4:
+            tristimulus[1] = 0
+            tristimulus[2] = 0
+            return
+    tristimulus[1] = (magnitudes[1] + magnitudes[2] + magnitudes[3]) / sigma;    
+    if len(frequencies) < 5:
+            tristimulus[2] = 0
+            return
+    sigma4 = 0        
+    for i in range(len(magnitudes)):
+        sigma4 += magnitudes[i]
+    tristimulus[2] = sigma4/sigma         
+    return tristimulus
+
 def dist_shape(central_moments):
     spread = central_moments[2] #variance of residuals
     if spread == 0:
@@ -120,6 +163,11 @@ def dist_shape(central_moments):
 #complexity = mag.size
 
 def intensity(complexity,kurtosis,dissonance):
+    """
+    This algorithm based on MTG studies computes
+    music signal intensity based on differences in 
+    signal complexity, kurtosis and dissonance
+    """
     if np.mean(complexity) <= 12.717778:
         if dmean(complexity) <= 1.912363:
             intensity = -1
@@ -147,6 +195,7 @@ def roll_off(spectrum,fs):
             rolloff=i
     rolloff *= (fs/2) / (spectrum.size-1)
     return rolloff
+
 
 def audio_fingerprint(peaks):
     encoded_peaks = hash(peaks[:4])
@@ -201,7 +250,7 @@ def find_saturation(song):
         past_mask = current_mask
     if prev_start and len(dflanks) > 9:
         start = prev_start
-        end = float(idx * song.H + dflanks[0] / song.fs)
+        end = float(idx * song.H + dflanks[0] / 48000)
         duration = end -start
         if duration > min_dur:
             starts.append(start)
@@ -209,13 +258,13 @@ def find_saturation(song):
         prev_start = 0
         dflanks.remove(dflanks[0])
     if len(uflanks) != len(dflanks) and len(uflanks) > 0:
-        prev_start = idx * song.H + uflanks[-1] / song.fs
+        prev_start = idx * song.H + uflanks[-1] / 48000
         uflanks.pop(-1) 
     if len(uflanks) != len(dflanks) and idx == 0:
         dflanks.pop(-1)
     for i in range(len(uflanks)):
-        start = float(idx * song.H + uflanks[0] / song.fs) 
-        end = float(idx * song.H + dflanks[0] / song.fs) 
+        start = float(idx * song.H + uflanks[0] / 48000) 
+        end = float(idx * song.H + dflanks[0] / 48000) 
         duration = end -start
         if duration >= min_dur:
             starts.append(start)
@@ -242,6 +291,9 @@ def hanning_NSGCQ(_window,M):
   return _window
 
 db2amp = lambda value: 0.5*pow(10, value/10) 
+lin2db = lambda x: 10*np.log10(x)
+amp2db = lambda amp: 2*lin2db(amp)
+db2lin = lambda dbs: pow(10,dbs/10)
 
 m_to_hz = lambda m: 700.0 * (np.exp(m/1127.01048) - 1.0)
 
@@ -273,9 +325,23 @@ def strong_peak(spectrum):
     return strong_peak
 
 def enhance_harmonics(_in):
+    """
+    This methods adds harmonics in a signal
+    """	
     o = []
     for i in range(int(_in.size/4)):
         o.append(_in[i] +  _in[2*i] + _in[i*4])
+    o = np.array(o) 
+    _in[:o.size] = o          
+    return _in
+
+def reduce_harmonics(_in):
+    """
+    This methods substracts harmonics in a signal
+    """
+    o = []
+    for i in range(int(_in.size/4)):
+        o.append(_in[i] -  _in[2*i] - _in[i*4])
     o = np.array(o) 
     _in[:o.size] = o          
     return _in
@@ -341,7 +407,7 @@ def NSGConstantQ(signal):
         cqtbw[j] = Q * _baseFreqs[j] + _gamma;
     _binsNum = _baseFreqs.size  
     _baseFreqs = np.append(_baseFreqs,0)     
-    _baseFreqs = np.append(_baseFreqs,int(signal.fs/2)) 
+    _baseFreqs = np.append(_baseFreqs,22050) 
 
     for j in reversed(range(_binsNum)):                                                 
          _baseFreqs = np.append(_baseFreqs,signal.fs -_baseFreqs[j])
@@ -625,7 +691,7 @@ class MIR:
         -param: audio: the input signal
         -fs: sampling rate
         -type: the type of window to use"""
-        self.signal = (mono_stereo(audio) if len(audio) == 2 else audio)
+        self.x = (mono_stereo(audio) if len(audio) == 2 else audio)
         self.fs = fs
         self.N = 4096
         self.M = 2048
@@ -634,7 +700,7 @@ class MIR:
         self.type = type
         self.nyquist = lambda hz: hz/(0.5*self.fs)
         self.to_db_magnitudes = lambda x: 20*np.log10(np.abs(x))
-        self.duration = len(self.signal) / self.fs
+        self.duration = len(self.x) / self.fs
         self.audio_signal_spectrum = []
         self.phase_signal = []
         self.pthread = Pool(nodes=2) #adjust threads
@@ -642,36 +708,42 @@ class MIR:
 
     def FrameGenerator(self):
         """Creates frames of the input signal based on detected peak onsets, which allow to get information from pieces of audio with much information"""
-        frames = int(len(self.signal) / self.H) 
+        frames = int(len(self.x) / self.H) 
         total_size = self.M
         for i in range(frames):
-            self.frame = self.signal[i*(self.M-self.H):(i*(self.M-self.H) + self.M)]
+            self.frame = self.x[i*(self.M-self.H):(i*(self.M-self.H) + self.M)]
             if not len(self.frame) == total_size:
                 break 
             elif all(self.frame == 0):           
-                print ("Frame values are all 0, discarding the frame")    
+                #print ("Frame values are all 0, discarding the frame")    
                 continue  
             else:           
                 yield self.frame
 
     def zcr(self):
           zero_crossing_rate = 0         
-          if self.signal[0] < 1e-16:
+          if self.x[0] < 1e-16:
               val = 0;
           else:
-              val = self.signal[0]          
+              val = self.x[0]          
           was_positive = val > 0.0 
-          for i in range(self.signal.size):
-            val = self.signal[i];
+          for i in range(self.x.size):
+            val = self.x[i];
             if abs(val) <= 1e-16:
                 val = 0;
             is_positive = val > 0.0;    
             if (was_positive != is_positive):
               zero_crossing_rate += val
               was_positive = is_positive
-          return zero_crossing_rate / self.signal.size
+          return zero_crossing_rate / self.x.size
 
     def Envelope(self):
+        """
+        This method computes the envelope of a frame using the sample rate
+        to set thresholds for attack and release respectively. After
+        compute the transient thresholds envelope values are computed by
+        comparing exponential sample differences between transient states.
+        """
         _ga = np.exp(- 1.0 / (self.fs * 10))
         _gr = np.exp(- 1.0 / (self.fs * 1500))     
         _tmp = 0                           
@@ -686,6 +758,10 @@ class MIR:
                 _tmp = 0
 
     def AttackTime(self): 
+        """
+        This method computes the attack time in seconds of an envelope.
+        Cutoffs are set to compute transient states of envelope.
+        """    
         start_at = 0.0;               
         cutoff_start_at = max(self.envelope) * 0.2 #initial start time
         stop_at = 0.0;      
@@ -708,6 +784,36 @@ class MIR:
             self.attack_time = 0.006737946999085467 #this should be correct for non-negative output
         else:
             self.attack_time = at
+
+    def StrongDecay(self): 
+        """
+        This method computes the strong decay of a signal, it being
+        defined as a non linear combination of a signal energy with 
+        its temporal centroid near the start boundary of energy.
+        Greater decays belong to more impulsed signals.
+        The spectral centroid is defined as the arithmetic mean of the waveform.
+        :returns: strongDecay: time of equilibrium between energy and temporal centroid. The assumption is empirically valid only if its time is approximate to the signal's centroid.
+        """    
+        strongDecay = 0.0;     
+        lenRange = self.x.size-1 / self.fs
+        _centroid = 0.0
+        _weights = 0.0        
+        _idx = 0;        
+        #consume signal to get centroids, energies and weights
+        for i in range(self.x.size):                                          
+            _centroid += i * abs(self.x[i])
+            _weights += abs(self.x[i])
+        for i in range(self.x.size):                                          
+            _centroid += i * abs(self.x[i])
+            _weights += abs(self.x[i])
+        if _weights == 0:                                          
+            _centroid = 0 
+        else:                                          
+            _centroid /= _weights  
+            _centroid /= self.fs
+        signalEnergy = self.x @ self.x.T
+        strongDecay = np.sqrt(signalEnergy / _centroid)  #seconds              
+        return strongDecay
 
     def IIR(self, array, cutoffHz, type,octave_rolloff=6):
         """Apply an Infinite Impulse Response filter to the input signal                                                                        
@@ -738,6 +844,11 @@ class MIR:
         return output 
 
     def pitch_salience_function(self,thres=1):
+        """
+        This methods computes arrays of pitch saliences
+        in terms of magnitude using harmonics peaks and
+        frequencies.
+        """
         _numberBins = int(np.floor(6000.0 / 10));
         _binsInSemitone = np.floor(100.0 / 10);
         _binsInOctave = 1200.0 / 10;
@@ -760,12 +871,12 @@ class MIR:
             raise IndexError("Empty argument for frequencies")
                                     
         numberPeaks = len(self.harmonic_frequencies)
+        self.salience_function = np.zeros(_numberBins)        
         for i in range(numberPeaks):
             if self.harmonic_frequencies[i] <= 0:
                 raise ValueError("Frequencies must be positive")
             if self.harmonic_magnitudes[i] <= 0:
                 raise ValueError("Magnitudes must be positive");         
-            self.salience_function = np.zeros(_numberBins)
             minMagnitude = self.harmonic_magnitudes[np.argmax(self.harmonic_magnitudes)] * _magnitudeThresholdLinear;
             for i in range(numberPeaks):
                 if self.harmonic_magnitudes[i] <= minMagnitude:
@@ -810,7 +921,7 @@ class MIR:
         b[0] = (1.0 - alpha) / a[0]
         b[1] = (-2.0 * np.cos(w0)) / a[0]
         b[2] = (1.0 + alpha) / a[0]
-        output = lfilter(b, a, self.signal) * 1
+        output = lfilter(b, a, self.x) * 1
         return output  
 
     def EqualLoudness(self, array):
@@ -908,8 +1019,8 @@ class MIR:
 
     def Spectrum(self, fft=True):
         """Computes magnitude spectrum of windowed frame""" 
-        if fft == True:                           
-            self.spectrum = self.fft(self.windowed_x)                  
+        if fft == True:
+            self.spectrum = self.fft(self.windowed_x)   
         else:                                                          
             self.magnitude_spectrum = constantq.cqt(self.windowed_x,hop_length=self.H, sr=self.fs,n_bins=113) #use constant Q(uality) for magnitude                                                                  
             self.audio_signal_spectrum.append(self.magnitude_spectrum) 
@@ -979,6 +1090,7 @@ class MIR:
 
     def MelFilter(self): 
         band_freq = self.calculate_filter_freq() 
+        #complexity-duration
         frequencyScale = (self.fs / 2.0) / (self.magnitude_spectrum.size - 1)                       
         self.filter_coef = np.zeros((self.n_bands, self.magnitude_spectrum.size))
         for i in range(self.n_bands):                          
@@ -1086,7 +1198,7 @@ class MIR:
         """Computes tempo of a signal in Beats Per Minute with its tempo onsets""" 
         self.onsets_strength()                                                             
         n = len(self.envelope) 
-        win_length = np.asscalar(np.array([int(np.floor(8*self.fs/self.H))]))
+        win_length = np.asscalar(np.array([int(np.floor(8*48000/self.H))]))
         ac_window = hann(win_length) 
         self.envelope = np.pad(self.envelope, int(win_length // 2),mode='linear_ramp', end_values=[0, 0])
         frames = 1 + int((len(self.envelope) - win_length) / 1) 
@@ -1125,7 +1237,7 @@ class MIR:
         interv_value = int(np.floor(self.bpm / 60 * self.fs))
         interval = 0
         self.ticks = []
-        for i in range(int(self.signal.size/interv_value)):
+        for i in range(int(self.x.size/interv_value)):
             self.ticks.append(interval + interv_value)
             interval += interv_value #compute tempo frames locations based on the beat location value
         self.ticks = np.array(self.ticks) / self.fs
@@ -1221,66 +1333,78 @@ class MIR:
             function[self.peaks_locations][:max_pts]
 
     def removePeak(self, peaksBins, peaksValues, i, j):  
-        peakBins = np.delete(peaksBins[i], peaksBins[i][:j])
-        peakValues = np.delete(peaksValues[i], peaksValues[i][:j])
-        return peakBins, peakValues
+        """
+        This function removes peaks from a salience
+        vector
+        """
+        for i in np.arange(i,j):
+            peaksBins[i].pop(i)
+        for i in np.arange(i,j):
+            peaksValues[i].pop(i)
+        return peaksBins, peaksValues
 
-    def trackPitchContour(self,_nonSalientPeaksBins,peak_thres=0):
+    def findNextPeak(self, peaksBins, contourBins, i, backward=False):  
+        """
+        This method searches for the best peak of a contour
+        by minimizing the distance from a starting peak.
+        A backward parameter is used for backtracking.
+        """
+        best_peak_j = -1;
+        binResolution = 10 #cents
+        pitchContinuity = 27.5625 #cents
+        _pitchContinuityInBins = pitchContinuity * 1000.0 * self.H / self.fs / binResolution;        
+        #bestPeakDistance = _pitchContinuityInBins
+        bestPeakDistance = 20
+        print('bins', len(peaksBins), 'at index', i)
+        for j in range(len(peaksBins[i])):
+            previousBin = contourBins[0] if backward else contourBins[-1]
+            print('prevBin', previousBin, 'pBins', peaksBins[i][j])
+            distance = abs(previousBin - peaksBins[i][j])
+            #print('Current distance', distance)
+            if (distance < bestPeakDistance):
+                best_peak_j = j
+                bestPeakDistance = distance
+        return best_peak_j;
+
+    def trackPitchContour(self, index, bins, saliences, _salientPeaksValues, _salientPeaksBins, _nonSalientPeaksValues, _nonSalientPeaksBins, peak_thres=0, ms = 400):
         max_i = 0
+        size_t = 0
         max_j = 0
-        _timeContinuityInFrames = (100 / 1000.0) * self.fs / self.H
+        _timeContinuityInFrames = (ms / 1000.0) * self.fs / self.H
         maxSalience = 0
-        bins = []
-        saliences = []
-        for i in range(_numberFrames):
-            if (self.salience_values[i].size > 0):
-                j = np.argmax(self.salience_values[i])
-            if self.salience_values[i][j] > maxSalience:
-                maxSalience = self.salience_values[j]
-            max_i = i
-            max_j = j
+        _numberFrames = len(_salientPeaksBins)       
+        for i in range(_numberFrames-1):
+            if (len(_salientPeaksValues[i]) > 0):
+                j = np.argmax(_salientPeaksValues[i])
+                if _salientPeaksValues[i][j] > maxSalience:
+                    maxSalience = _salientPeaksValues[i][j]
+                    max_i = i
+                    size_t = i
+                    max_j = j
             if maxSalience == 0:
+                #print('NO PEAK YET')
                 return None
                 
-        index = max_i; #contour starts at maximum salience peak
-        bins.append(self.salience_bins[index])  
-        saliences.append(self.salience_values[index])   
+        index = max_i; #contour starts at maximum salience peak        
+        #add best position to contour
+        bins.append(_salientPeaksBins[index][max_j])  
+        saliences.append(_salientPeaksValues[index][max_j])   
+        #delete from salience
         _salientPeaksBins, _salientPeaksValues = self.removePeak(_salientPeaksBins, _salientPeaksValues, index, max_j)   
-        for i in range(_numberFrames):
-            best_peak_j = self.findNextPeak(_salientPeaksBins, bins, i)
+        #print('SALIENCES POSITION', _salientPeaksBins, _salientPeaksValues)
+        gap = 0    
+        self.removeNonSalientPeaks = []               
+        for i in range( index+1, _numberFrames ):
+            if len(_salientPeaksBins) < i:
+                return bins, saliences, index, _salientPeaksBins, _salientPeaksValues, _nonSalientPeaksBins, _nonSalientPeaksValues 
+            best_peak_j = self.findNextPeak(_salientPeaksBins, bins, i, True)
+            print( '1335 BEST PEAK', i )
             if best_peak_j >= 0:
                 bins.append(_salientPeaksBins[index][best_peak_j])
                 saliences.append(_salientPeaksValues[index][best_peak_j])   
+                #print('1344 REMOVING SALIENCES')
                 _salientPeaksBins, _salientPeaksValues = self.removePeak(_salientPeaksBins, _salientPeaksValues, i, best_peak_j)
-                gap = 0
-            else:
-                if gap+1 > _timeContinuityInFrames:
-                    break
-                best_peak_j = self.findNextPeak(_nonSalientPeaksBins, bins, i)
-                if best_peak_j >= 0:
-                    bins.append(_nonSalientPeaksBins[i][best_peak_j])
-                    saliences.append(_nonSalientPeaksValues[i][best_peak_j])
-                    removeNonSalientPeaks.append([i, best_peak_j])
-                    gap += 1
-                else:
-                    break
-
-        for g in range(gap):
-            bins.pop(-1)
-            saliences.pop(-1)
-            if index == 0:
-                if bins.size < _timeContinuityInFrames:
-                    bins = np.array([])
-                    return bins
-
-        gap = 0
-        for i in range(-1,size_t):
-            best_peak_j = self.findNextPeak(_salientPeaksBins, bins, i)
-            if best_peak_j >= 0:
-                bins.append(_salientPeaksBins[index][best_peak_j])
-                saliences.append(_salientPeaksValues[index][best_peak_j])   
-                _salientPeaksBins, _salientPeaksValues = self.removePeak(_salientPeaksBins, _salientPeaksValues, i, best_peak_j) 
-                i -= 1
+                #index -= 1
                 gap = 0
             else:
                 if gap+1 > _timeContinuityInFrames:
@@ -1290,6 +1414,40 @@ class MIR:
                     bins.append(_nonSalientPeaksBins[i][best_peak_j])
                     saliences.append(_nonSalientPeaksValues[i][best_peak_j])
                     self.removeNonSalientPeaks.append([i, best_peak_j])
+                    #index -= 1
+                    gap += 1
+                else:
+                    break
+
+        for g in range(gap):
+            bins.pop(-1)
+            saliences.pop(-1)
+        if index == 0:
+            if len(bins) < _timeContinuityInFrames:
+                bins = []
+                saliences = []
+            return bins, saliences, index, _salientPeaksBins, _salientPeaksValues, _nonSalientPeaksBins, _nonSalientPeaksValues 
+        print('1364 Saliences', saliences, len(_salientPeaksValues))
+        print('1365 Bins', bins, len(_salientPeaksBins))            
+        gap = 0
+        for i in range(index-1,size_t):       	
+            best_peak_j = self.findNextPeak(_salientPeaksBins, bins, i, True)
+            if best_peak_j >= 0:
+                bins.append(_salientPeaksBins[index][best_peak_j])
+                saliences.append(_salientPeaksValues[index][best_peak_j])   
+                #print('1384 REMOVING SALIENCES')
+                _salientPeaksBins, _salientPeaksValues = self.removePeak(_salientPeaksBins, _salientPeaksValues, i, best_peak_j) 
+                index -= 1
+                gap = 0
+            else:
+                if gap+1 > _timeContinuityInFrames:
+                    break
+                best_peak_j = self.findNextPeak(_nonSalientPeaksBins, bins, i, True)
+                if best_peak_j >= 0:
+                    bins.append(_nonSalientPeaksBins[i][best_peak_j])
+                    saliences.append(_nonSalientPeaksValues[i][best_peak_j])
+                    self.removeNonSalientPeaks.append([i, best_peak_j])
+                    index -= 1
                     gap += 1
                 else:
                     break
@@ -1297,65 +1455,110 @@ class MIR:
                 i -= 1
             else:
                 break
-                
-        bins = np.delete(bins,bins[:gap])
-
-        saliences = np.delete(saliences,saliences[:gap])
-                
+         
+        for i in np.arange(0,gap):
+            bins.pop(i)
+        for i in np.arange(0,gap):
+            saliences.pop(i)             
         index += gap
 
-        for r in range(-1,self.removeNonSalientPeaks.size):
-            i_p = self.removeNonSalientPeaks[r][0]
-            if i_p < index or i_p > index + len(bins):
-                continue
-            j_p = self.removeNonSalientPeaks[r][1]
-            bins, saliences = self.removePeak(_nonSalientPeaksBins, _nonSalientPeaksValues, i_p, j_p)
+        #print('1400 NON SALIENT', self.removeNonSalientPeaks)        
+        if len(self.removeNonSalientPeaks) != 0:
+            for r in range(-1,len(self.removeNonSalientPeaks)):
+                i_p = self.removeNonSalientPeaks[r][0]
+                if i_p < index or i_p > index + len(bins):
+                    continue
+                j_p = self.removeNonSalientPeaks[r][1]
+                _nonSalientPeaksBins, _nonSalientPeaksValues = self.removePeak(_nonSalientPeaksBins, _nonSalientPeaksValues, i_p, j_p)
+        #sleep(10*1000)
+        return bins, saliences, index, _salientPeaksBins, _salientPeaksValues, _nonSalientPeaksBins, _nonSalientPeaksValues    
 
-    def pitch_contours(self,peak_thres=0):
-        """Computes magnitudes and frequencies of a frame of the input signal by peak interpolation"""
-        _timeContinuityInFrames = (100 / 1000.0) * self.fs / self.H;
-        _minDurationInFrames = (100 / 1000.0) * self.fs / self.H;
-        _pitchContinuityInBins = 100 * 1000.0 * self.H / self.fs / 10;
+    def pitch_contours(self, ms=88, peak_thres=0):
+        """This function uses saliences vectors to compute the pitch
+        contours of a signal by filtering bins and frequencies using
+        a salience threshold and then searching for the subset of salient
+        peaks.
+        Output are vectors and are used over the size of the saliences matrix"""
+        _timeContinuityInFrames = (ms / 1000.0) * self.fs / self.H;
+        _minDurationInFrames = (ms / 1000.0) * self.fs / self.H;
+        _pitchContinuityInBins = 27.5625 * 1000.0 * self.H / self.fs / 10;
         _frameDuration = self.H / self.fs
         _numberFrames = len(self.salience_bins)
-        _nonSalientPeaksBins=np.zeros(_numberFrames)
-        _nonSalientPeaksValues=np.zeros(_numberFrames)
+        #print('Number frames', _numberFrames)
+        _salientPeaksBins= [[] for i in range(_numberFrames)]
+        _salientPeaksValues= [[] for i in range(_numberFrames)]
+        _nonSalientPeaksBins= [[] for i in range(_numberFrames)]
+        _nonSalientPeaksValues= [[] for i in range(_numberFrames)]
+        #print('1464 Salience bins', _nonSalientPeaksBins, _salientPeaksBins)  
+        #print('1465 Salience values', _nonSalientPeaksValues, _salientPeaksValues)          
         salientInFrame = []
-        self.contour_bins = np.zeros(len(self.salience_bins))
-        self.contour_saliences = np.zeros(len(self.salience_bins))
+        self.contour_bins = []
+        self.contour_saliences = []
+        self.contoursStartTimes = []
         for i in range(_numberFrames):
             numPeaks = self.salience_bins[i].size
         for i in range(_numberFrames):
             if (self.salience_values[i].size == 0):
                 continue
-            frameMinSalienceThreshold = .9 * max(self.salience_values[i]);    
+            frameMinSalienceThreshold = .9 * np.max(self.salience_values[i]); 
             for j in range(self.salience_bins[i].size):
-                if (self.salience_values[i][j] < frameMinSalienceThreshold):
-                    _nonSalientPeaksBins[i] = self.salience_bins[i][j] 
-                    _nonSalientPeaksValues[i] = self.salience_values[i][j]     
-                else:
-                    salientInFrame.append([i,j])
+                try:
+                    if (self.salience_values[i][j] < frameMinSalienceThreshold):
+                        _nonSalientPeaksBins[i].append(self.salience_bins[i][j])
+                        _nonSalientPeaksValues[i].append(self.salience_values[i][j])
+                    else:
+                        salientInFrame.append([i,j])
+                except Exception as e:
+                    #print(logger.exception(e))
+                    if (self.salience_values[i][j] < frameMinSalienceThreshold):
+                        _nonSalientPeaksBins[i].append(self.salience_bins[i][j])
+                        _nonSalientPeaksValues[i].append(self.salience_values[i][j])
+                    else:
+                        salientInFrame.append([i,j])
+            size_t = i         
+        allPeakValues = []        
+        for i in range(len(salientInFrame)):
+            ii = salientInFrame[i][0]
+            jj = salientInFrame[i][1]
+            allPeakValues.append(self.salience_values[ii][jj])
+        salienceMean = np.mean(np.array(allPeakValues))
+        #print('Salience mean', salienceMean)               
+        overallMeanSalienceThreshold = salienceMean - np.std(np.array(allPeakValues), int(salienceMean))
 
         for i in range(len(salientInFrame)):
             ii = salientInFrame[i][0]
             jj = salientInFrame[i][1]
             if (self.salience_values[ii][jj] < overallMeanSalienceThreshold):
-                _nonSalientPeaksBins[ii] = self.salience_bins[ii][jj]
-                _nonSalientPeaksValues[ii] = self.salience_values[ii][jj]
+                _nonSalientPeaksBins[ii].append(self.salience_bins[ii][jj])
+                _nonSalientPeaksValues[ii].append(self.salience_values[ii][jj])
             else:
-                _SalientPeaksBins[ii] = self.salience_bins[ii][jj]
-                _SalientPeaksValues[ii] = self.salience_values[ii][jj]
+                _salientPeaksBins[ii].append(self.salience_bins[ii][jj])
+                _salientPeaksValues[ii].append(self.salience_values[ii][jj])
+                if _salientPeaksBins[ii] != []:
+                   print('SALIENT PAIR IN SECONDS',i * 2048 / 48000)           
+            size_t = ii
+            size_t = jj          
+
+        _nonSalientPeaksBins = [i for i in _nonSalientPeaksBins if i != []]
+        _salientPeaksValues = [i for i in _salientPeaksValues if i != []]  
+        _nonSalientPeaksValues = [i for i in _nonSalientPeaksValues if i != []]
+        _salientPeaksBins = [i for i in _salientPeaksBins if i != []]                         
+
+        #print('1482 Bins', _salientPeaksBins)  
+        #print('1483 Saliences', _salientPeaksValues) 
+        #sleep(100)
 
         while True:
-            bins, saliences = trackPitchContour(index, self.contour_bins, self.contour_saliences)
-            jj = salientInFrame[i][1]
-            if (self.contour_bins.size > 0):
-                if (self.contour_bins.size >= _minDurationInFrames):
-                    contoursStartTimes.append(i * _frameDuration)
+            bins, saliences, size_t, _salientPeaksBins, _salientPeaksValues, _nonSalientPeaksBins, _nonSalientPeaksValues = self.trackPitchContour(size_t, self.contour_bins, self.contour_saliences, _salientPeaksValues, _salientPeaksBins, _nonSalientPeaksValues, _nonSalientPeaksBins)           
+            print('Tracked bins:', bins, 'Tracked saliences:', saliences, 'Frames duration:', _minDurationInFrames)  
+            print('Contour bins and saliences:', self.contour_bins, self.contour_saliences)  
+            if (len(bins) > 0):
+                if (len(bins) >= _minDurationInFrames):
+                    self.contoursStartTimes.append(size_t * _frameDuration)
                     self.contour_bins.append(bins);
                     self.contour_saliences.append(saliences)
-                else:
-                    break
+            else:
+                break            
                     
     def pitch_salience_function_peaks(self,peak_thres=0):
         """Computes magnitudes and frequencies of a frame of the input signal by peak interpolation"""
@@ -1368,25 +1571,35 @@ class MIR:
         self.salience_values = peaks
         self.salience_bins = bins
 
-    def spectral_peaks(self):
+    def spectral_peaks(self, interpolate=True):
         """Computes magnitudes and frequencies of a frame of the input signal by peak interpolation"""
         self.peak_thres = 0
         thresh = np.where(self.magnitude_spectrum[1:-1] > self.peak_thres, self.magnitude_spectrum[1:-1], 0)            
         next_minor = np.where(self.magnitude_spectrum[1:-1] > self.magnitude_spectrum[2:], self.magnitude_spectrum[1:-1], 0)
         prev_minor = np.where(self.magnitude_spectrum[1:-1] > self.magnitude_spectrum[:-2], self.magnitude_spectrum[1:-1], 0)
-        peaks_locations = thresh * next_minor * prev_minor
-        self.peaks_locations = peaks_locations.nonzero()[0] + 1
-        val = self.magnitude_spectrum[self.peaks_locations]
-        lval = self.magnitude_spectrum[self.peaks_locations -1]
-        rval = self.magnitude_spectrum[self.peaks_locations + 1]
-        iploc = self.peaks_locations + 0.5 * (lval- rval) / (lval - 2 * val + rval)
-        self.magnitudes = val - 0.25 * (lval - rval) * (iploc - self.peaks_locations)
-        self.frequencies = (self.fs/2) * iploc / self.N 
-        bound = np.where(self.frequencies < 22000) #only get frequencies lower than 5000 Hz
-        self.magnitudes = self.magnitudes[bound][:456] #we use only 100 magnitudes and frequencies
-        self.frequencies = self.frequencies[bound][:456]
-        self.frequencies, indexes = np.unique(self.frequencies, return_index = True)
-        self.magnitudes = self.magnitudes[indexes]
+        if interpolate == True:
+            peaks_locations = thresh * next_minor * prev_minor
+            self.peaks_locations = peaks_locations.nonzero()[0] + 1
+            val = self.magnitude_spectrum[self.peaks_locations]
+            lval = self.magnitude_spectrum[self.peaks_locations -1]
+            rval = self.magnitude_spectrum[self.peaks_locations + 1]
+        else:
+            lval = self.magnitude_spectrum[-1]
+            rval = self.magnitude_spectrum[1] 
+        if interpolate == True:    
+            iploc = self.peaks_locations + 0.5 * (lval- rval) / (lval - 2 * val + rval)
+            self.magnitudes = val - 0.25 * (lval - rval) * (iploc - self.peaks_locations)
+            self.frequencies = (self.fs/2) * iploc / self.N 
+        else:
+            iploc = np.arange(self.magnitude_spectrum.size)
+            self.magnitudes = self.magnitude_spectrum - 0.25 * (lval - rval) * (iploc)
+            self.frequencies = (self.fs/2) * iploc / self.N    
+        if interpolate == True:    
+            bound = np.where(self.frequencies < 22000) #only get frequencies lower than 5000 Hz
+            self.magnitudes = self.magnitudes[bound][:456] #we use only 100 magnitudes and frequencies
+            self.frequencies = self.frequencies[bound][:456]
+            self.frequencies, indexes = np.unique(self.frequencies, return_index = True)
+            self.magnitudes = self.magnitudes[indexes]
 
     def fundamental_frequency(self):
         """Compute the fundamental frequency of the frame frequencies and magnitudes"""
@@ -1652,11 +1865,11 @@ class sonify(MIR):
         angular_freq = 2 * np.pi * 1000 / float(self.fs)            
         click = np.logspace(0, -10, num=int(np.round(self.fs * 0.015)), base=2.0)                                                          
         click *= np.sin(angular_freq * np.arange(len(click)))                             
-        click_signal = np.zeros(len(self.signal), dtype=np.float32)
+        click_signal = np.zeros(len(self.x), dtype=np.float32)
         for start in locations:
             end = start + click.shape[0]     
-            if end >= len(self.signal):       
-                click_signal[start:] += click[:len(self.signal) - start]                                                                  
+            if end >= len(self.x):       
+                click_signal[start:] += click[:len(self.x) - start]                                                                  
             else:                                                   
                 click_signal[start:end] += click                    
         return click_signal
@@ -1666,18 +1879,18 @@ class sonify(MIR):
         angular_freq = 2 * np.pi * 1000 / float(self.fs)            
         click = np.logspace(0, -10, num=int(np.round(self.fs * 0.015)), base=2.0)                                                          
         click *= np.sin(angular_freq * np.arange(len(click)))                             
-        click_signal = np.zeros(len(self.signal), dtype=np.float32)
+        click_signal = np.zeros(len(self.x), dtype=np.float32)
         for start in locations:
             end = start + click.shape[0]     
-            if end >= len(self.signal):       
-                click_signal[start:] += click[:len(self.signal) - start]                                                                  
+            if end >= len(self.x):       
+                click_signal[start:] += click[:len(self.x) - start]                                                                  
             else:                                                   
                 click_signal[start:end] += click                    
         return click_signal
     def output_array(self, array):
         self.M = 1024
         self.H = 512
-        output = np.zeros(len(self.signal)) 
+        output = np.zeros(len(self.x)) 
         i = 0
         for frame in self.FrameGenerator():
             output[i*(self.M-self.H):(i*(self.M-self.H) + self.M)] += array[i]  
@@ -1708,10 +1921,10 @@ class sonify(MIR):
         self.f0 = Counter(self.f0s).most_common()[0][0]
         self.mel_bands_global()
         self.bpm()
-        self.tempo_onsets = clicks(frames = self.ticks * self.fs, length = len(self.signal), sr = self.fs, hop_length = self.H)
+        self.tempo_onsets = clicks(frames = self.ticks * self.fs, length = len(self.x), sr = self.fs, hop_length = self.H)
         starts = self.ticks * self.fs
         for i in starts:
-            self.frame = self.signal[int(i):int(i)+1024]
+            self.frame = self.x[int(i):int(i)+1024]
             self.Envelope()
             self.AttackTime()
             self.ats.append(self.attack_time)
@@ -1733,9 +1946,13 @@ def width_interpolation(w_idx,size):
     return w_interp
 
 def danceability(audio, w, cumsum, fs):        
+    """
+    This method computes danceability from an audio signal
+    using a linear regression model to compute a Detrended Fluctuation Analysis array
+    """
     frame_size = int(0.01 * fs)
-    audio = audio[:fs * 3]
     nframes = audio.size / frame_size
+    #Cumulative target is computed as a frame-wise variable
     S = []
     for i in range(int(nframes)):
         fbegin = i * frame_size
@@ -1745,42 +1962,50 @@ def danceability(audio, w, cumsum, fs):
         S[i] -= np.mean(S) 
     for i in range(len(S)):      
         S[i] += S[i-1]           
-    tau = []                     
-    for i in range(11, 930):   
-        i *= 1.5              
+    tau = []     
+    minTaums = 469
+    maxTaums = 39000
+    minTau = int(48000*(minTaums/1000)/2048)                
+    maxTau = int(48000*(maxTaums/1000)/2048) 
+    for i in range(minTau, maxTau):   
+        i *= 1.5          
+        #10 taus = sample_rate / 2    
         tau.append(int(i/10)) 
     tau = np.unique(tau) 
     F = np.zeros(len(tau))                                                            
     nfvalues = 0   
     Target = width_interpolation(cumsum.cumsum(),len(S))         
     for i in range(len(tau)):        
+        #2.10s of relevant info
         jump = max(tau[i]/50, 1)   
         if nframes >= tau[i]: 
-            k = jump 
-            while k < int(nframes-tau[i]):
+            #loop over the next frames
+            for k in range(int(nframes-tau[i])):
                 fbegin = int(k)
                 fend = int(k + tau[i])   
-                reg = S[fbegin:fend] * w
-                F[i] += np.sum((Target[fbegin:fend]-reg)**2)
+                reg = (np.mat(S[fbegin:fend]).T * np.array([w])).T
+                #estimate error
+                F[i] += np.sum(np.power(Target[fbegin:fend]-reg, 2))
+                #continue stepping
                 k += jump     
+            #in boundary
             if nframes == tau[i]:
                 F[i] = 0 
             else:
+                #fluctuation = rms dev from boundary
                 F[i] = np.sqrt(F[i] / ((nframes - tau[i])/jump)) 
             nfvalues += 1
         else:
             break
-
-
     dfa = np.zeros(len(tau))
     for i in range(nfvalues-1):
         if F[i+1] != 0:
+            #convert to log10 fluctuation
             dfa[i] = np.log10(F[i+1] / F[i]) / np.log10( (tau[i+1]+3.0) / (tau[i]+3.0))
         else:
-            break
-    motion = dfa[np.nan_to_num(dfa) > 0]
-    motion = motion[motion < 1.5]    
-    return 1/(motion.sum() / len(motion))
+            break   
+    #take fluctuation from number of frames
+    return (1/(dfa.sum() / len(dfa)))/3*100
 
 def music_structure_analysis(signal,separator,fun='median'):
     audio,fs = read(signal)
@@ -1795,7 +2020,7 @@ def music_structure_analysis(signal,separator,fun='median'):
     for magnitude in song.audio_signal_spectrum:
         song.magnitude_spectrum = magnitude
         song.spectral_peaks()
-        pcps.append(hpcp(song,28)) #> 400
+        pcps.append(hpcp(song,480))
     pcps = np.array(pcps)
     ticks = np.array(ticks)    
 
@@ -1899,19 +2124,24 @@ def AMEKEQ200(song, db1,db2,db3,db4,db5,q1,q2,q3,q4,q5,hz1,hz2,hz3,hz4,hz5,band_
     mid = 1 - ((widening) / 2)
     Mid = mid * (.5/mid)
     x_wide = []
-    for i in range(len(song.signal)-2): 
-        x_wide.append(song.signal[i] - Mid * song.signal[i+1] + song.signal[i+2])
+    for i in range(len(song.x)-2): 
+        x_wide.append(song.x[i] - Mid * song.x[i+1] + song.x[i+2])
     x_wide.append(0)
     x_wide.append(0)    
     x_wide = np.array(x_wide)    
-    thd = (song.signal - np.mean(song.signal)) *  (10 ** (thd_db/20)) + song.signal
+    thd = (song.x - np.mean(song.x)) *  (10 ** (thd_db/20)) + song.x
     mono = song.AllPass(band_mono,1)
     output = (a+b+c+d+e+thd+mono+x_wide)
     return output / output.max()
 
-
-
-def hpcp(song, nbins):
+def hpcp(song, nbins, split_freq=500):
+    """
+    This method computes the relative contribution
+    of equal tempered intervals to the sum of all
+    intervals. Semitones is used as equality boundaries for
+    harmonics tracking and therefore, profile values
+    belong to TET tonalities (rather than just or pure).
+    """
     def add_contribution(freq, mag, bounded_hpcp):
         for i in range(len(harmonic_peaks)):
             f = freq * pow(2., -harmonic_peaks[i][0] / 12.0)
@@ -1921,6 +2151,7 @@ def hpcp(song, nbins):
             pcpBinF = np.log2(f / ref_freq) * pcpSize
             leftBin = int(np.ceil(pcpBinF - resolution * M / 2.0))
             rightBin = int((np.floor(pcpBinF + resolution * M / 2.0)))
+            obj_profile = np.zeros(bounded_hpcp.size)
             assert(rightBin-leftBin >= 0)
             for j in range(leftBin, rightBin+1):
                 distance = abs(pcpBinF - j)/resolution
@@ -1930,7 +2161,7 @@ def hpcp(song, nbins):
                 iwrapped = j % pcpSize
                 if (iwrapped < 0):
                     iwrapped += pcpSize
-                bounded_hpcp[iwrapped] += w * pow(mag,2) * hw * hw
+                bounded_hpcp += w * pow(mag,2) * hw * hw                 
         return bounded_hpcp
     precision = 0.00001
     M = 1 #one semitone as a window size M of value 1
@@ -1938,7 +2169,6 @@ def hpcp(song, nbins):
     nh = 12
     min_freq = 40
     max_freq = 5000
-    split_freq = 500
     hpcp_LO = np.zeros(nbins)
     hpcp_HIGH = np.zeros(nbins)
     harmonic_peaks = np.vstack((np.zeros(nbins), np.zeros(nbins))).T
@@ -1957,16 +2187,19 @@ def hpcp(song, nbins):
             harmonic_peaks[i][1] = 1/ow
         else:
             harmonic_peaks[i][1] += (1.0 / ow)
+    #print('HP', harmonic_peaks)
     for i in range(song.frequencies.size):
         if song.frequencies[i] >= min_freq and song.frequencies[i] <= max_freq:
-            if not np.any(song.frequencies < 500):
+            if not np.any(song.frequencies < split_freq):
                 pass
             else:
                 if song.frequencies[i] < split_freq:
                     hpcp_LO = add_contribution(song.frequencies[i], song.magnitudes[i], hpcp_LO)
+                    #print('PCP LOW', hpcp_LO)
             if song.frequencies[i] > split_freq:
                 hpcp_HIGH = add_contribution(song.frequencies[i], song.magnitudes[i], hpcp_HIGH)
-    if np.any(song.frequencies < 500):
+                #print('PCP HIGH', hpcp_HIGH)
+    if np.any(song.frequencies < split_freq):
         hpcp_LO /= np.sum(hpcp_LO)
     else:
         hpcp_LO = np.zeros(nbins)
@@ -1974,6 +2207,375 @@ def hpcp(song, nbins):
     for i in range(len(hpcps)):
         hpcps[i] = hpcp_LO[i] + hpcp_HIGH[i]
     return hpcps
+
+def profile_peaks(pcp):
+    """
+    This function is a pitch tracker for HPCP vectors.
+    """
+    peaks = []
+    size = pcp.size
+    hpcpw = np.zeros(size+2)
+    hpcpw[0] = pcp[size-1]
+    for i in range(size):
+        hpcpw[i+1] = pcp[i]
+    hpcpw[size+1] = pcp[0]
+    for i in range(size+1):
+        if hpcpw[i-1] <= hpcpw[i] and hpcpw[i] >= hpcpw[i+1]:  
+            peaks.append((i-1,hpcpw[i])) 
+    peaks = np.sort(np.array(peaks))
+    #print(np.array(peaks))
+    #print(np.max(peaks))
+    if peaks.size > 24:
+        np.resize(peaks,24)
+    return peaks             
+
+def high_res_features(pcp):
+    """
+    This function takes a HPCP array to return a set
+    of high level features describing the tunning system 
+    of the signal that can be useful to describe musical
+    harmony in terms of a tempered system.
+    Since tempered system divides a tone into values of equal
+    sizes and HPCP vectors convert harmonic peaks in frames bins
+    into bins that are log2 to decrease step differences (as in a
+    tempered system), values in resolution features are equal tempered
+    system descriptors and can be used as equal temperament values of
+    the harmonic peaks. 
+    The greatest EQ tuning system is 96 TET (96 TONES)
+    Profiles were taken as harmonic peaks weighted to 
+    high and low semitones (with f0 note), therefore features 
+    describe tonality between harmonics notes in signal.
+    The methodology is as follows:
+    	- Perform pitch tracking over the pcp matrix to get
+    	the salient peaks of the profile.
+    	- Estimate peak resolution deviations. TET deviations
+    	are computed as sums of stable consecutive peaks.     
+    	Stabilization is measured using deviation thresholds 
+    	to see if they are apart of the tunning system (without
+    	weighting). A stable profile allows to compute a normalized
+    	deviation.    
+    	Deviations must be understood stochastically between different
+    	tuning systems. A comparative structure between an equal temperament
+    	system and another system can be as follows:
+    		EQ temperament (12 TET)	in cents		Aprox. difference	in cents		Harmonic system in cents
+    						1											0	(unison)								1
+    						1.0595									.0314								1.0666
+    						1.1225									.0025								1.1250
+    						1.1892									.0108								1.2000 (just)
+    						1.2599									.0099								1.2500
+    						1.3348									.0015	(4ta perfecta)			1.3333
+    						1.4142									0 (tritone)						1.4142
+    						1.4983									.0017	(5ta perfecta)			1.5000 (just)
+    						1.5874									.0126								1.6000 (just)
+    						1.6818									.0151								1.6667
+    						1.7818									.0318								1.7500
+    						1.8897									.0564								1.8750
+    						2.0000									0 (octave)						2
+    						...										...								...
+    						3.0000									0 (next octave)				3.0000
+    		Using this comparative structure someone would go through octaves of a scale and produce
+    		equally sized tonal approximations that apply to all degrees of a note in all its octaves.
+    		Logically, a 96 TET system (with accurate transposition of most degrees of a note's scale) 
+    		is as follows:			
+    		Interval 											Size in cents		Aprox. difference	in cents		Just system in cents
+    			Octava 												1200							0	(unison)					1200
+    			Oct. semidisminuida								1150							-1.23							1151.23
+    			Sept. supermayor (binaria)						1137.5						.046							1137
+    			Sept. mayor											1087.5						-.77							1088.27
+    			Sept. neutral, tono mayor						1050							.64							1049.36
+    			Sept. neutral, tono menor						1037.5						2.5							1035
+    			Septima menor justa alargada					1012.5						-5.1							1017.5
+    			Septima menor justa corta						1000							3.91							996.09
+    			Septima harmonica	(binaria +700)				975							6.17							968.83
+    			Sexta supermayor									937.5							4.17							933.13
+    			Sexta mayor											887.5							3.14							884.6
+    			Sexta neutral										850							-2.59							852.59
+    			Sexta menor											812.5							-1.19							813.69
+    			Sexta submenor										762.5							-2.42							764.92
+    			Quinta perfecta (binaria +200)				700							-1.96							701.96
+    			Quinta menor										650							1.32							648.68
+    			Tritono de septima inferior					587.5							4.99							582.51
+    			Cuarta mayor										550							-1.32							551.32
+    			Cuarta perfecta (binaria -200)				500							1.96							498.04    			
+    			Tercera mayor tridecima							450							-4.21							454.21    			
+    			Tercera mayor con septima						437.5							2.42							435.08    			
+    			Tercera mayor										387.5							1.19							386.31    			
+    			Tercera neutral indecima						350							2.59							347.41 
+    			Tercera supermenor								337.5							1.37							336.13 
+    			El harmonico 77									325							4.86							320.14 
+    			Tercera menor										312.5							-3.14							315.64 
+    			Tercera menor septima con segunda			300							-1.85							301.85 
+    			Tercera menor tridecima							287.5							-1.71							289.21 
+    			Segunda aumentada	en justa						275							.42							274.58
+    			Tercera menor septima							262.5							-4.37							266.87
+    			Quinta con tridecima - Cuarta					250							2.26							247.74
+    			Completo con septima	(binaria -700)			225							-6.17							231.17
+    			Segunda mayor en tono mayor					200							-3.91							203.91
+    			Segunda mayor en tono menor					187.5							5.1							182.4
+    			Indecima superior en segunda neutral		162.5							-2.5							165
+    			Indecima inferior en segunda neutral		150							-.64							150.64
+    			Semitono de septima diatonica					125							5.56							119.44
+    			Septima diatonica	en justa						112.5							.77							111.73
+    			Segunda menor indecimal							100							-2.64							97.36
+    			Semitono de septima cromatica					87.5							3.03							84.47
+    			Semitono de justa cromatica					75								4.33							70.67
+    			Segunda menor con septima (binaria)			62.5							-.46							62.96
+    			Cuarta indecimal - tono							50								-3.27							53.27
+    			Diesis indecimal									37.5							-1.41							38.91
+    			Coma septima										25								-2.26							27.26
+    			Semicoma septima									12.5							-1.29							13.79
+    			Unisono												0								0								0   		
+    	- Applying Fourier's FFT theorem to a tempered tuning system,
+    	a (tuned) note with the same number of bins as another note
+    	can be analyzed using a proper FFT size, therefore musical
+    	pitches of an equal temperament system can be analyzed using
+    	low level methods.
+    	- Non tempered energy is computed as the difference between 
+    	the sum of equal tempered bins to the squared sum of bins in 
+    	all bins. Values closer to 1 indicate tonality.
+    	- Non tempered energy peaks is computed as the difference between 
+    	the sum of equal tempered peaks (bins in succession or during
+    	convolution) to the squared sum of peaks in all bins. Values closer 
+    	to 1 indicate tonality.
+    """
+    pcp_size = pcp.size
+    bins_per_semitone = pcp_size/12
+    if pcp_size % 12 != 0 or pcp_size == 0:
+        print('Profile must be a multiple of 12')
+    #compute equal tempered deviation 
+    #from the local maxima bin using power    
+    peaks = profile_peaks(pcp)
+    print(peaks)  
+    for i in range(len(peaks)):
+        f = peaks[i][0]/bins_per_semitone
+        #tet system to just difference
+        dev = f-int(f)
+        if dev > .5:
+            dev -= 1
+        peaks[i][0] = dev
+    eq_temp_dev = 0
+    total_weights = 0
+    for i in range(len(peaks)):
+        eq_temp_dev += np.abs(peaks[i][0] * peaks[i][1])
+        total_weights += peaks[i][1]
+    #deviation from frequency bins in an equal tempered system
+    if total_weights != 0:
+        eq_temp_dev /= total_weights
+    tempered_energy = 0
+    total_energy = 0
+    #energy of profile as sum of complete profile's power
+    for i in range(pcp_size):
+        total_energy += pcp[i] **2
+        if (i % bins_per_semitone == 0):
+            tempered_energy += pcp[i] **2    
+    #equal tempered energy to total energy            
+    if total_energy > 0:
+        _nt2t_energy_ratio = 1 - tempered_energy / total_energy
+    else:
+        _nt2t_energy_ratio = 0
+    tempered_peaks_energy = 0
+    total_peaks_energy = 0
+    #energy of profile as sum of relevant profile's power
+    for i in range(len(peaks)):
+        total_peaks_energy += peaks[i][1] * peaks[i][1]
+        if peaks[i][1] == 0:
+            tempered_peaks_energy += peaks[i][1] * peaks[i][1]
+    #profile peaks energy to total peaks energy 
+    if total_peaks_energy > 0:
+        _nt2t_peaks_energy_ratio = 1 - tempered_peaks_energy / total_peaks_energy
+    else:
+        _nt2t_peaks_energy_ratio = 0
+    return eq_temp_dev, _nt2t_energy_ratio, _nt2t_peaks_energy_ratio
+
+def get_pitch_contours(song, frame, i):
+    """
+    This method takes a song class instance
+    to compute pitch contours from scratch.
+    Methodology is as follows:
+    	- Take spectrogram of frames
+    	- Take fundamental frequency of spectrogram
+    	- Take harmonics of spectrogram
+    	- Take salience and get the peaks (with bins in cents)
+    	- Use peaks to compute contours
+    """
+    try:
+        song.frame = frame
+        #print('Current step', i)
+        song.window()
+        song.Spectrum()
+        song.spectral_peaks()
+        song.fundamental_frequency()
+        #print('F0', song.f0)
+        song.harmonic_peaks()
+        song.pitch_salience_function()
+        song.pitch_salience_function_peaks()
+        #print('HARMONIC FREQUENCIES', song.harmonic_frequencies)
+        return song.salience_values, song.salience_bins, song.f0, song.harmonic_magnitudes, song.harmonic_frequencies
+    except Exception as e:
+        #print(logger.exception(e))
+        return None
+
+def get_full_spectrogram(song, frame):
+    """
+    This method takes a song class instance
+    to compute pitch contours from scratch.
+    Methodology is as follows:
+    	- Take spectrogram of frames
+    	- Take fundamental frequency of spectrogram
+    	- Take harmonics of spectrogram
+    	- Take salience and get the peaks (with bins in cents)
+    	- Use peaks to compute contours
+    """
+    try:
+        song.frame = frame
+        #print('Current step', i)
+        song.window()
+        song.Spectrum()
+        song.spectral_peaks(interpolate=False)
+        return song.magnitudes, song.frequencies
+    except Exception as e:
+        #print(logger.exception(e))
+        return None
+
+
+def song_pitch_contours(song, bpm=120, psize=2):
+    """
+    This function returns an array of
+    pitch contours from a song class instance
+    frames. Contours are processed in parallel
+    heaps to gain performance. Frames with no
+    salience or contour are discarded  
+    """
+    pthread = Pool(nodes=psize)
+    song_copies = [song for frame in song.FrameGenerator()]    
+    frame_copies = [frame for frame in song.FrameGenerator()]   
+    print('Starting thread with', len(song_copies),'copies')     
+    pcomplete = 0
+    bins = []
+    values = []
+    f0s = []
+    starts = []
+    peaks = []
+    freqs = []
+    nheaps = int( len(song_copies) / (2 ** (psize + 1) -1 * (psize + 1)) )
+    for i in range(nheaps):
+        while pcomplete < int( len(song_copies) - ( len(song_copies) / (i+1) ) ):
+            song_heap, frame_heap = song_copies[pcomplete:pcomplete+psize], frame_copies[pcomplete:pcomplete+psize]
+            pt = pthread.amap(get_pitch_contours, song_heap, frame_heap, [j for j in range(len(frame_heap))])
+            while not pt.ready():
+                pass
+            salience_data = pt.get()
+            for data in range(len(salience_data)):
+                if len(salience_data[data][0]) != 0:
+                    values.append(salience_data[data][0])
+                    bins.append(salience_data[data][1])
+                    f0s.append(salience_data[data][2])
+                    peaks.append(salience_data[data][3])
+                    freqs.append(salience_data[data][4])
+                    starts.append(data*2048/48000)
+            pcomplete += psize
+    pcomplete = 0
+    spectral_peaks = []
+    spectral_freqs = []                
+    for i in range(nheaps):
+        while pcomplete < int( len(song_copies) - ( len(song_copies) / (i+1) ) ):
+            song_heap, frame_heap = song_copies[pcomplete:pcomplete+psize], frame_copies[pcomplete:pcomplete+psize]
+            pt = pthread.amap(get_full_spectrogram, song_heap, frame_heap)
+            while not pt.ready():
+                pass
+            spec_data = pt.get()
+            for data in range(len(spec_data)):
+                if len(salience_data[data][0]) != 0:
+                    print('SPEC DATA', spec_data[data])
+                    spectral_peaks.append(spec_data[data][0])
+                    spectral_freqs.append(spec_data[data][1])
+            pcomplete += psize
+    values = np.array(values)
+    bins = np.array(bins)       
+    song.salience_bins = bins
+    song.salience_values = values
+    song.salience_f0s = f0s
+    #print('SALIENCES BINS IN CENTS', song.salience_bins)     
+    #print('COMPUTING CONTOURS')
+    #song.pitch_contours()
+    #print('CONTOURS PEAKS', song.contour_saliences)              
+    #print('CONTOURS IN CENTS', song.contour_bins)    
+    #return song.contour_bins, song.contour_saliences
+    #print('FREQUENCIES', freqs)    
+    return song.salience_bins, song.salience_values, song.salience_f0s, starts, peaks, freqs, spectral_peaks, spectral_freqs
+
+def process_high_res_features(song, frame, i):
+    """
+    This methods computes high resolution features
+    from harmonic pitch class profiles of 96 tones,
+    following the greatest known equal tempered system
+    of 96 TET to get the most accurate precission at
+    all musical intervals between diverse styles. 
+    """
+    try:
+        song.frame = frame
+        #print('Current step', i)
+        song.window()
+        song.Spectrum()
+        song.spectral_peaks()
+        song.fundamental_frequency()
+        song.harmonic_peaks()
+        pcp = hpcp(song,96)
+        #print('PCP', pcp)
+        hr_feat = high_res_features(pcp)
+        print('HR FEAT', np.array(hr_feat).shape)
+        return hr_feat
+    except Exception as e:
+        logger.exception(e)
+        return None
+
+def high_res_data(song, psize=4):
+    """
+    This function takes a signal and computes its high resolution features.
+    The algorithm starts by computing the harmonic peaks from the spectral peaks
+    of the signal frames, then computes a HPCP of each frame to compute the high 
+    resolution features from the vectors.
+    Features are following:
+    1) Eq. tempered deviation: it measures deviation of the local maxima of profile with respect to
+    peaks of non tempered cents
+    2) Non-tempered energy bins: it measures the presence of non tempered energy comparing non-tempered bins
+    to local energy. A value higher than 1 should indicate that some bins in the frequency domain lack tunning.
+    3) Non-tempered peaks: it measures the presence of non tempered energy comparing non-tempered peaks
+    to local energy. A value higher than 1 should indicate that some peaks in the magnitude domain lack tunning.
+    These features are processed in parallel heaps to gain performance.
+    -param: song: a song class instance         
+    -param: psize: pool size of aquireable threads (rather psize**2)
+    """
+    deviation = []
+    energy_ratio = []
+    peaks_energy_ratio = [] 
+    pthread = Pool(nodes=2)
+    song_copies = [song for frame in song.FrameGenerator()]    
+    frame_copies = [frame for frame in song.FrameGenerator()]   
+    pcomplete = 0
+    high_res_data = []
+    while pcomplete < len(song_copies):
+        pt = pthread.amap(process_high_res_features, song_copies[pcomplete:pcomplete+psize], frame_copies[pcomplete:pcomplete+psize], [i for i in range(pcomplete, pcomplete+psize)])
+        while not pt.ready():
+            pass
+        high_res_data.append(pt.get())
+        pcomplete += psize
+    return np.hstack(high_res_data)
+
+def attacks_from_signal(song):
+    """This function estimates the attack time
+    of all frames in signal with a robust constraint
+    for other envelope sections
+    """
+    attacks = []
+    for frame in song.FrameGenerator():
+        song.Envelope()
+        song.AttackTime()
+        attacks.append(song.attack_time)
+    attacks = np.array(attacks)
+    mean = np.mean(attacks)
+    attacks[attacks<mean] = 1e-4
+    return attacks
 
 def addContributionHarmonics(pitchclass, contribution, M_chords):                                                        
   weight = contribution                                                                                                  
@@ -2370,7 +2972,7 @@ def Key(pcp):
     key = key_names[keyi]
             
     firstto_2ndrelative_strength = (maximum - max2) / maximum
-    print(key,firstto_2ndrelative_strength)
+    #print(key,firstto_2ndrelative_strength)
     return key, scale, firstto_2ndrelative_strength
 
 def chord_sequence(song,hpcps):
@@ -2403,3 +3005,4 @@ def ChordsDetection(hpcps, song):
             continue
         chords.append((key + scale, firstto_2ndrelative_strength))
     return chords   
+
