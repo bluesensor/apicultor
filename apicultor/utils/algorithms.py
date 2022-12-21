@@ -691,7 +691,8 @@ class MIR:
         -param: audio: the input signal
         -fs: sampling rate
         -type: the type of window to use"""
-        self.x = (mono_stereo(audio) if len(audio) == 2 else audio)
+        self.x = audio
+        self.signal = audio
         self.fs = fs
         self.N = 4096
         self.M = 2048
