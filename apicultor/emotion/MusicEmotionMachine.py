@@ -856,7 +856,7 @@ class svm_layers(deep_support_vector_machines):
                 y[np.logical_not(x[:,column]>limit)] = target        
         return y                
             
-    def compile_features(self,x,y,conflicts,hyp,column,condition):
+    def compile_features(self, x, y, conflicts, hyp, column, condition, dependency):
         """
         Given backward error points and a dependency explanation, this method
         restores dependencies with the explained relations such that all misclassified
@@ -868,29 +868,26 @@ class svm_layers(deep_support_vector_machines):
         :param hyp: a string between 'mean', 'var' or 'std' or a numerical value
         :param column: perturbed feature of dependency                            
         :param condition: a bool expressing condition of hypothesis
+        :param dependency (type(dependency) == int): a target variable
         :returns:                                         
-            - x: compiled features
             - y: compiled targets
         """
-        nerrors = []
-        for i in range(len(conflicts)):
-            nerrors.append(len(conflicts[i]))
-        dependency = np.argmin(nerrors)  
         if hyp == 'mean':
-            limit = x[:,column].mean()
+            limit = x[:, column].mean()
         elif hyp == 'var':
-            limit = np.var(x[:,column])
+            limit = np.var(x[:, column])
         elif hyp == 'std':
-            limit = np.std(x[:,column])
+            limit = np.std(x[:, column])
         else:
             limit = hyp
-        for i in range(len(conflicts)):
-            if i != dependency:
-                if condition is True:
-                    y[conflicts[i]][x[conflicts[i]][:,column]>limit] = dependency
-                else:
-                    y[conflicts[i]][np.logical_not(x[conflicts[i]][:,column]>limit)] = dependency        
-        return np.delete(x,conflicts[dependency],axis=0), np.delete(y,conflicts[dependency])            
+        if condition is True:
+            #print(y[x[:, column] > limit])
+            y[x[:, column] > limit] = dependency
+            y[x[:, column] < limit] = 0
+        else:
+            y[np.logical_not(x[:, column] > limit)] = dependency
+            y[np.logical_not(x[:, column] < limit)] = 0
+        return y          
 
     def supress(x,y,conflicts):
         """
@@ -967,8 +964,7 @@ class svm_layers(deep_support_vector_machines):
         except Exception as e:
             return []
         
-
-    def compa_grade(self,x,found,cols,hyp,depcol,condition):
+    def compa_grade(self, x, found, cols, hyp, depcol, condition, dependency):
         """
         Keep compatibility after a prediction task using positions of conflicts
         to resolve dataset dependencies
@@ -980,14 +976,11 @@ class svm_layers(deep_support_vector_machines):
         :param depcol: perturbed feature of dependency                            
         :param condition: a bool expressing condition of hypothesis
         :returns:                                         
-            - xresolved: usable dataset
+            - ysolved: solved targets
         """
-        conflicts = self.get_conflicts(x,found,cols)
-        if conflicts != []:
-            xresolved, ysolved = self.compile_features(x,found,conflicts,hyp,depcol,condition)
-            return xresolved 
-        else:
-            return x #model decay 
+        ysolved = self.compile_features(
+                x, found, [], hyp, depcol, condition, dependency)
+        return ysolved
             
 def best_kernels_output(best_estimator, kernel_configs):
     """
@@ -1021,8 +1014,125 @@ class main_svm(deep_support_vector_machines):
         self.output_dir = output_dir
         self.fit_model(self._S, lab, kernels_config[0], kernels_config[1], C, reg_param, gamma, 0.8)
         self._labels = self.predictions(self._S, lab)
-        print((self._labels))
-        print((score(lab, self._labels)))
+        self.arch = defaultdict(list)
+
+    def load(self):
+        """
+        Load environment data before post hoc
+        """
+        self.read_checkpoint(permadatadir, 'emotions')
+        self.save_buffer_checkpoint('emotions')
+        self.kernel1 = 'poly'  # can't be changed unless there is a kernel upgrade
+        self.model = deepcopy(self)
+        self.read = True
+        
+    def get_models_from_root(self):
+        """
+        Start model instances from directory
+        """
+        try:
+            self.read
+        except Exception as e:
+            self.load()
+
+    def run(self):
+        """
+        Code for execution via CLI
+        :param files_dir: source of JSON files of dataset  
+        :param output_dir: source of files to locate data
+        :param transition: a string or list of strings to instantiate the model. If 't' is given,
+        the model starts training, if 'r' is given the model retrains for shrimp classification, if
+        's' is given the model is used in production (both TL tasks should be learned)
+        :param density: density value given by user (shrimps/m2)                           
+        :param weight: weight (in grams) given by the user
+        :returns:                                         
+            - instance of layer with processed data
+        """
+        #main for training
+        return self
+
+    def read_clean_signal(self, arr):
+        """
+        A function that records 1 second of audio    
+        :returns:                                         
+          - Recorder instance in class        
+        """
+        # clean the array
+        # print('IMPROVING SOUND QUALITY')
+        #ar = clean_signal(ar=arr)
+        #print('MIR')
+        # retrieve information using array as file data
+        #self.features = process_file(
+        #    ar=ar, inputSoundFile=None, tag_dir='dataset', input_filename=None)
+        return self
+
+    def live_task(self):
+        """
+        A function that takes signal features to perform a live operation   
+        :returns:                                         
+          - Recorder instance in class        
+        """
+        # feature selection
+        features, dics = desc_pair(
+            self.features, self.features).pairs_from_files()   
+        #max of values
+        #features = np.vstack((features, np.array([1526.0,16.0,7184.0,956.0,22.9,3.67e-05,0,0,0])))
+        #min of values
+        #features = np.vstack((features, np.array([0.0,3.666,775.5,4.727,0.002218,-4.38e-05,0,0,0])))
+        #fscaled = feature_scaling(features)
+        #fscaled = fscaled.T[:6].T
+        #find min threshold for dependency
+        # build compatible hypothesis with train set peaks
+        #chyp = (min_click_bin_shrimps - 0.0) / (1526.0 - 0.0)
+        #empirical condition
+        #logic = True
+        #target of task
+        #dependency = 2
+        #relevant feature of target
+        #relevant_feature = 0
+        #target-wise relevant features 
+        #relevant_features = [0, 3, 3]
+        # remove train values from production
+        #fscaled = fscaled[:-2]
+        self.model.gamma = .8
+        try:  # use loaded model to recognize the environment
+            found = self.model.predictions(
+                np.array(fscaled), None)  # predictions must be unsupervised
+        except Exception as e:
+            logger.exception(e)
+            return 0
+        # does this become a case of model drifting?
+        # return clean targets
+        print(fscaled)
+        #print(found)
+        #print('HYPOTHESIS', chyp)
+        compatible_targets = np.array(self.model.compa_grade(
+            fscaled, found, relevant_features, chyp, relevant_feature, logic, dependency))
+        #print('COMPATIBLE TARGETS',compatible_targets)    
+        return len(compatible_targets[compatible_targets==dependency])
+
+    def perform(self, arr=None):
+        """
+        Code for execution via CLI
+        :param arr: numpy array of a signal
+        :returns:                                         
+            - instance of layer with processed data
+        """
+        #prevent event breaking
+        self.read_clean_signal(arr)
+        #print('ANALYZING', self.features)
+        self.live_task()
+        return self
+
+    def start_loop(self, arr=None):
+        # start a workers threading
+        try:  
+            self.live_task(arr)
+            # compute activity degree after previous events
+            return 1
+        except Exception as e:
+            return 0
+
                                                     
     def neg_and_pos(self, files):
         """
@@ -1050,6 +1160,7 @@ class main_svm(deep_support_vector_machines):
         """ 
         array = pandas.DataFrame(self.neg_and_pos(files))
         array.to_csv(self.output_dir + '/files_classes.csv')            
+      
 
 #create emotions directory in data dir if multitag classification has been performed
 def emotions_data_dir(files_dir):
