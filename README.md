@@ -107,8 +107,6 @@ Interdisciplinary performances based on sounds of the web platform [Redpanal.org
 
 # Dependencies
 
-APICultor By @hordiales Hernan Ordiales y @MarsCrop Marcelo Tuller
-
 Tested under Linux, Mac OS (>10.11) and Windows 10.
 
 Debian, Ubuntu 15.04 and 16.04 (and .10). And [Docker](docker/Docker.md) images.
@@ -116,5 +114,8 @@ Raspian @ Raspberry Pi
 
 See [INSTALL.md](INSTALL.md)
 
+# Authors
+
+APICultor By @hordiales Hernan Ordiales y @MarsCrop Marcelo Tuller
 
 
